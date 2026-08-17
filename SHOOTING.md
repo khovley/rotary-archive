@@ -1,0 +1,104 @@
+# How to photograph the collection
+
+Read this before you shoot the bulk of the material. Ten minutes of setup here
+saves hours of correcting crops later.
+
+The single biggest factor in whether the software finds items automatically is
+**how much the background contrasts with what you lay on it.** On the built-in
+benchmark, a contrasting background finds 100% of items with tight crops. A
+pale background under pale paper drops crop accuracy noticeably and puts items
+into the review queue.
+
+---
+
+## Setup
+
+**Background.** One sheet of matte poster board, larger than your biggest item.
+
+| What you're shooting | Use |
+|---|---|
+| Newspaper clippings, letters, programs, certificates | **Black** or very dark |
+| Dark photographs, dark mounts, black card | **White** or very light |
+
+Matte, not glossy — gloss reflects the ceiling light back at the lens and
+creates bright patches the detector reads as edges. Black foam board or a
+non-reflective black cloth both work well. Avoid wood grain, tablecloths with
+patterns, and anything with a printed texture.
+
+**Light.** Bright, even, indirect. Near a window on an overcast day is ideal.
+Two lamps at 45° from opposite sides also works.
+
+- **Turn the flash off.** It blows out the centre and hard-edges the shadows.
+- Watch for your own shadow falling across the items — stand to the side.
+- One soft shadow under each item is fine and expected. A hard shadow that
+  *bridges the gap* between two items can make them read as one, which is the
+  one error the software cannot recover from.
+
+**Camera.** Your iPhone is fine. Highest resolution, HEIC or JPEG both work.
+
+---
+
+## Laying out the items
+
+- **6 to 10 items per photo** is the sweet spot. More than that and each item
+  gets too few pixels to transcribe reliably.
+- **Leave a clear gap** — at least a finger's width — between items. Touching
+  or overlapping items are the main cause of two pieces being merged into one.
+- **Don't overlap anything.** If an item is partly hidden, the part that's
+  hidden is gone from the archive.
+- Keep everything **fully inside the frame**, with a margin of background all
+  the way around. An item running off the edge gets cropped short.
+- Group loosely by row. The software numbers items top-to-bottom then
+  left-to-right, so a tidy grid makes the results easier to check.
+
+## Taking the shot
+
+1. Hold the phone **flat above the table**, lens parallel to the surface.
+   Some tilt is corrected automatically, but less tilt means a better crop.
+2. Get close enough that the items **fill most of the frame** — background
+   around the edges is wasted resolution.
+3. **Tap to focus** on one of the items before shooting.
+4. Take the picture. Check it's sharp before moving on; blurry text can't be
+   transcribed by anything.
+
+## Items that need their own photo
+
+Shoot these one at a time, filling the frame:
+
+- Anything larger than about A4 / letter size
+- Anything with small or faint print you'd struggle to read at arm's length
+- Fragile items you don't want to move much
+- Three-dimensional objects — badges, banners, trophies, gavels
+
+The software handles a single item filling the frame automatically; you don't
+need to tell it.
+
+## Things that are fine
+
+- **Curled or folded paper.** Flatten it as best you can under glass or a
+  weight at the edges; the perspective correction handles the rest.
+- **Faded or yellowed items.** Don't try to correct colour while shooting.
+- **Handwriting on the back.** Shoot both sides as separate photos.
+- **Items already in an album.** Shoot the page; you can add individual crops
+  by hand in the review step.
+
+---
+
+## Then what
+
+Copy the photos from your phone into the `inbox/` folder and run:
+
+```
+rotary run
+```
+
+That ingests, finds the items, crops and straightens them, and opens the review
+page in your browser. Anything the software wasn't confident about is shown
+first — everything else you can approve in a single click.
+
+If a crop is wrong, drag its corners in the review page and it re-crops from
+the original full-resolution photo. If an item was missed entirely, use
+**Add missed item** on that photo and draw a box around it.
+
+The original photos are never modified. If detection goes badly on a batch, you
+can reshoot or re-run without losing anything.

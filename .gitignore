@@ -1,0 +1,21 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Archive data: masters are irreplaceable but far too large for git.
+# Back these up separately (Time Machine / Synology / external drive).
+archive.db
+archive.db-journal
+archive.db-wal
+inbox/*
+masters/
+derivatives/
+exports/
+site/
+!inbox/.gitkeep
+
+# Never commit credentials.
+.env
+secrets.toml

@@ -1,0 +1,76 @@
+# Rotary Archive configuration.
+# Paths are relative to this file's directory unless absolute.
+
+[paths]
+inbox       = "inbox"
+originals   = "masters/originals"
+items       = "masters/items"
+derivatives = "derivatives"
+exports     = "exports"
+site        = "site"
+database    = "archive.db"
+
+[segment]
+# Long-edge pixels used for detection. Detection runs on a downscaled copy for
+# speed; coordinates are mapped back to full resolution before warping.
+work_long_edge = 2000
+
+# Candidate area as a fraction of the source frame. Below min = noise/shadow,
+# above max = the background itself was detected.
+min_area_frac = 0.015
+max_area_frac = 0.90
+
+# Reject long thin slivers (table edges, pen shadows).
+max_aspect_ratio = 8.0
+
+# Reject ragged shapes (hands, folds, cast shadows). contour_area / hull_area.
+min_solidity = 0.80
+
+# Two candidates overlapping more than this are treated as the same item.
+iou_merge_threshold = 0.35
+
+# A single candidate covering more than this fraction of the frame means the
+# photo is of one item, shot close up.
+single_item_frac = 0.85
+
+[rectify]
+# Residual rotation search range for the fine deskew, in degrees. Perspective
+# correction handles the gross angle; this cleans up the last fraction.
+max_fine_skew_deg = 5.0
+
+# Don't bother rotating for less than this - resampling costs more than it gains.
+min_fine_skew_deg = 0.15
+
+# JPEG quality for the full-resolution archival item master.
+master_quality = 95
+
+# Long-edge sizes for published WebP derivatives.
+derivative_sizes = [1600, 800, 320]
+derivative_quality = 82
+
+[review]
+host = "127.0.0.1"
+port = 8765
+
+# Items below this detection confidence are surfaced in the "flagged" view.
+# Calibrated against the synthetic benchmark: clean shots on a contrasting
+# background score 0.86-1.00, while crops where the detection passes disagreed
+# about the item's edge fall to 0.75 or below. 0.80 separates those cleanly.
+flag_below_confidence = 0.80
+
+[llm]
+provider = "anthropic"          # anthropic | openai | gemini | ollama | claude_cli
+model    = "claude-opus-5"
+fallback = []                   # e.g. ["claude_cli"] - tried on failure
+use_batch = true                # 50% cheaper, asynchronous
+max_concurrency = 4             # used when batching is unavailable
+
+# Set above 0.0 to enable two-tier analysis: a cheaper model runs first and
+# only items below this confidence are re-run on `model`.
+escalate_below_confidence = 0.0
+escalate_from_model = "claude-sonnet-5"
+
+# Derivative size sent to the vision model. 1600 sits well inside the
+# high-resolution ceiling while costing roughly half the image tokens of a
+# full-size upload, with no legibility loss on a rectified crop.
+analyze_image_size = 1600

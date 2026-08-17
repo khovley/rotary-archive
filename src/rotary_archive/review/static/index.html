@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rotary Archive — Review</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="bar">
+  <div class="bar-left">
+    <strong>Rotary Archive</strong>
+    <span class="sep">/</span>
+    <span id="summary" class="muted">loading…</span>
+  </div>
+  <div class="bar-right">
+    <div class="segmented" role="group" aria-label="Filter items">
+      <button data-filter="flagged" class="on">Flagged</button>
+      <button data-filter="pending">Pending</button>
+      <button data-filter="all">All</button>
+    </div>
+    <button id="approve-visible" class="primary">Approve all visible</button>
+    <button id="help-toggle" class="ghost" title="Keyboard shortcuts">?</button>
+  </div>
+</header>
+
+<div id="help" class="help" hidden>
+  <div class="help-grid">
+    <div><kbd>J</kbd> / <kbd>K</kbd><span>next / previous item</span></div>
+    <div><kbd>A</kbd><span>approve item</span></div>
+    <div><kbd>X</kbd><span>reject item</span></div>
+    <div><kbd>R</kbd><span>rotate 90°</span></div>
+    <div><kbd>C</kbd><span>open crop editor</span></div>
+    <div><kbd>Shift</kbd>+<kbd>A</kbd><span>approve everything visible</span></div>
+    <div><kbd>P</kbd><span>approve rest of this photo</span></div>
+    <div><kbd>Esc</kbd><span>close editor</span></div>
+  </div>
+</div>
+
+<main id="app" class="stack" aria-live="polite"></main>
+
+<div id="toast" class="toast" hidden></div>
+
+<!-- Crop editor: drag the four corners on the source photo. -->
+<div id="editor" class="modal" hidden>
+  <div class="modal-inner">
+    <div class="modal-head">
+      <span id="editor-title">Adjust crop</span>
+      <div class="modal-actions">
+        <button id="editor-reset" class="ghost">Reset to detected</button>
+        <button id="editor-cancel" class="ghost">Cancel</button>
+        <button id="editor-save" class="primary">Save &amp; re-crop</button>
+      </div>
+    </div>
+    <p class="muted hint">
+      Drag the corner handles. Corners are stored against the full-resolution
+      photo, so the re-crop uses the original pixels, not this preview.
+    </p>
+    <div id="editor-stage" class="stage"></div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

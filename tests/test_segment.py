@@ -1,0 +1,174 @@
+"""Segmentation, measured against synthetic scenes with known ground truth.
+
+The headline metric is item *count*: a slightly loose crop is fixable in the
+review UI, but an item the detector never proposed is silently lost from the
+archive. Crop tightness is checked separately via IoU.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from rotary_archive import geometry
+from rotary_archive.segment import (
+    Candidate,
+    _drop_swallowers,
+    segment_image,
+)
+from synthetic import make_table_shot
+
+IOU_PASS = 0.80
+
+
+def quad(x0, y0, x1, y1):
+    return np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.float32)
+
+
+def candidate(x0, y0, x1, y1, area_frac=0.1, method="edge"):
+    return Candidate(
+        quad=quad(x0, y0, x1, y1), confidence=0.9, method=method, area_frac=area_frac
+    )
+
+
+# --------------------------------------------------------------- unit tests --
+
+
+# Candidate holds a numpy array, so `x in list` would invoke elementwise
+# comparison and raise. Compare by identity instead.
+def contains(items, target):
+    return any(item is target for item in items)
+
+
+def test_drop_swallowers_removes_a_quad_covering_two_items():
+    """A blob that engulfed two separate items must not survive - if it did,
+    the widest-wins merge would pick it and cost us an item."""
+    left = candidate(0, 0, 40, 100, area_frac=0.10)
+    right = candidate(60, 0, 100, 100, area_frac=0.10)
+    swallower = candidate(0, 0, 100, 100, area_frac=0.40)
+
+    kept = _drop_swallowers([swallower, left, right])
+
+    assert not contains(kept, swallower)
+    assert contains(kept, left) and contains(kept, right)
+
+
+def test_drop_swallowers_keeps_a_quad_containing_one_item():
+    """Containing a single smaller detection is normal - that is just the
+    content-crop of the same object, not two objects."""
+    inner = candidate(10, 10, 90, 90, area_frac=0.10)
+    outer = candidate(0, 0, 100, 100, area_frac=0.30)
+
+    kept = _drop_swallowers([outer, inner])
+    assert contains(kept, outer)
+
+
+def test_drop_swallowers_ignores_similarly_sized_neighbours():
+    a = candidate(0, 0, 100, 100, area_frac=0.30)
+    b = candidate(10, 10, 90, 90, area_frac=0.25)   # not < 0.65 * a
+    assert len(_drop_swallowers([a, b])) == 2
+
+
+# ------------------------------------------------------ end-to-end scenes --
+
+
+SCENES = [
+    pytest.param(dict(n_items=6, seed=7), 6, id="6-dark"),
+    pytest.param(dict(n_items=8, seed=11), 8, id="8-dark"),
+    pytest.param(dict(n_items=4, seed=3), 4, id="4-dark"),
+    pytest.param(dict(n_items=10, seed=13), 10, id="10-dense"),
+    pytest.param(dict(n_items=6, seed=9, tilt=0.03, max_angle=20), 6, id="6-tilted"),
+    pytest.param(dict(n_items=6, seed=17, background=128), 6, id="6-mid-grey"),
+    pytest.param(dict(n_items=6, seed=5, background=235), 6, id="6-light"),
+]
+
+
+@pytest.fixture(scope="module")
+def seg_config():
+    from rotary_archive.config import load_config
+    from pathlib import Path
+
+    return load_config(Path(__file__).resolve().parents[1]).segment
+
+
+@pytest.mark.parametrize("scene,expected", SCENES)
+def test_finds_every_item(tmp_path, seg_config, scene, expected):
+    path = tmp_path / "scene.jpg"
+    make_table_shot(path, **scene)
+    result = segment_image(path, seg_config)
+    assert len(result.candidates) == expected
+
+
+@pytest.mark.parametrize("scene,expected", SCENES)
+def test_crops_are_tight(tmp_path, seg_config, scene, expected):
+    """Every ground-truth item is matched by a detection at IoU >= 0.8.
+
+    The light-background scene is the documented worst case - low contrast
+    between cream paper and a pale table - so it is allowed one loose crop,
+    which must be flagged (asserted separately below).
+    """
+    path = tmp_path / "scene.jpg"
+    truth = make_table_shot(path, **scene)
+    result = segment_image(path, seg_config)
+
+    ious = [
+        max((geometry.bbox_iou(t.quad, c.quad) for c in result.candidates), default=0.0)
+        for t in truth
+    ]
+    allowed_misses = 1 if scene.get("background", 28) > 200 else 0
+    misses = sum(1 for i in ious if i < IOU_PASS)
+    assert misses <= allowed_misses, f"IoUs: {[round(i, 3) for i in ious]}"
+
+
+def test_loose_crops_are_flagged(tmp_path, seg_config):
+    """The confidence score must actually track crop quality.
+
+    This is the property that makes the review workflow work: if bad crops
+    scored high, the "flagged only" view would hide exactly what needs looking
+    at. An earlier pass-agreement heuristic got this backwards.
+    """
+    path = tmp_path / "light.jpg"
+    truth = make_table_shot(path, n_items=6, seed=5, background=235)
+    result = segment_image(path, seg_config)
+
+    for item in truth:
+        iou, cand = max(
+            ((geometry.bbox_iou(item.quad, c.quad), c) for c in result.candidates),
+            key=lambda pair: pair[0],
+        )
+        if iou < IOU_PASS:
+            assert cand.confidence < 0.80, (
+                f"loose crop (IoU {iou:.3f}) scored {cand.confidence:.2f} "
+                "and would not be surfaced for review"
+            )
+
+
+def test_single_item_close_up(tmp_path, seg_config):
+    path = tmp_path / "single.jpg"
+    make_table_shot(path, n_items=1, seed=2)
+    result = segment_image(path, seg_config)
+    assert len(result.candidates) == 1
+
+
+def test_blank_frame_falls_back_to_whole_image(tmp_path, seg_config):
+    """An empty background yields no contours; rather than dropping the photo
+    we hand back the whole frame and flag it."""
+    import cv2
+
+    path = tmp_path / "blank.jpg"
+    cv2.imwrite(str(path), np.full((600, 800, 3), 30, np.uint8))
+
+    result = segment_image(path, seg_config)
+    assert len(result.candidates) == 1
+    assert result.needs_review
+    assert result.candidates[0].method == "whole_frame"
+
+
+def test_reading_order_is_top_to_bottom_then_left_to_right(tmp_path, seg_config):
+    path = tmp_path / "order.jpg"
+    make_table_shot(path, n_items=6, seed=7)
+    result = segment_image(path, seg_config)
+
+    centres = [c.quad.mean(axis=0) for c in result.candidates]
+    rows = [(round(c[1] / 500), c[0]) for c in centres]
+    assert rows == sorted(rows), f"out of order: {rows}"
