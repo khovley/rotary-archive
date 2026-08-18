@@ -51,7 +51,12 @@ const document = {
   addEventListener(type, fn) {
     (listeners[type] ||= []).push(fn);
   },
-  documentElement: { scrollHeight: 800 },
+  // classList is required: app.js tags the root element `standalone` or
+  // `embedded` so CSS can make the header sticky only when it is useful.
+  documentElement: {
+    scrollHeight: 800,
+    classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+  },
 };
 
 const location = { hash: "" };
