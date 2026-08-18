@@ -301,6 +301,82 @@ def _boundary_score(
     return float(np.clip(1.0 - leak, 0.0, 1.0))
 
 
+def _split_touching(
+    mask: np.ndarray, frame_area: float, cfg: dict[str, Any]
+) -> list[Candidate]:
+    """Rescue pass: pull apart items that merged into one blob.
+
+    When items are laid out touching or overlapping - which is how people
+    actually arrange a table, whatever the shooting guide says - every pass
+    finds one ragged mass instead of several rectangles, and the shape filters
+    reject it. The result is no candidates at all and a useless whole-frame
+    crop.
+
+    A distance transform peaks at the centre of each item and dips where two
+    meet, so thresholding it yields one seed per item; watershed then grows
+    those seeds back over the mask. The splits are approximate, and where one
+    item genuinely covers another the hidden part is simply gone - no algorithm
+    recovers it. But approximate boxes a human can drag are far more use than
+    nothing, so everything this produces is flagged for review.
+
+    Runs only when the normal passes came up empty. It must never disturb the
+    well-behaved case.
+    """
+    filled = mask.copy()
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cv2.drawContours(filled, contours, -1, 255, thickness=cv2.FILLED)
+
+    distance = cv2.distanceTransform(filled, cv2.DIST_L2, 5)
+    if distance.max() <= 0:
+        return []
+
+    # 0.35 of the peak is deliberately low: a high threshold splits one item
+    # into several, which costs a human more time than a missed split.
+    _, seeds = cv2.threshold(distance, 0.35 * distance.max(), 255, cv2.THRESH_BINARY)
+    seeds = seeds.astype(np.uint8)
+
+    count, markers = cv2.connectedComponents(seeds)
+    if count <= 2:
+        return []   # one blob and background: nothing to split
+
+    markers = markers + 1
+    unknown = cv2.subtract(filled, seeds)
+    markers[unknown > 0] = 0
+    cv2.watershed(cv2.cvtColor(filled, cv2.COLOR_GRAY2BGR), markers)
+
+    min_area = frame_area * float(cfg.get("min_area_frac", 0.015))
+    max_area = frame_area * float(cfg.get("max_area_frac", 0.90))
+    max_aspect = float(cfg.get("max_aspect_ratio", 8.0))
+
+    out: list[Candidate] = []
+    for label in range(2, count + 1):
+        region = np.uint8(markers == label) * 255
+        pieces, _ = cv2.findContours(
+            region, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        if not pieces:
+            continue
+        contour = max(pieces, key=cv2.contourArea)
+        area = cv2.contourArea(contour)
+        if area < min_area or area > max_area:
+            continue
+
+        quad, _ = _contour_to_quad(contour)
+        if geometry.aspect_ratio(quad) > max_aspect:
+            continue
+
+        out.append(
+            Candidate(
+                quad=quad,
+                # Low by construction: these are guesses that need a human.
+                confidence=0.4,
+                method="split",
+                area_frac=float(area / frame_area),
+            )
+        )
+    return out
+
+
 def _drop_swallowers(candidates: Sequence[Candidate]) -> list[Candidate]:
     """Remove detections that have engulfed two or more separate items.
 
@@ -419,6 +495,22 @@ def segment_image(path: Path, cfg: dict[str, Any]) -> SegmentResult:
     ]
     merged = _merge_candidates(raw, float(cfg.get("iou_merge_threshold", 0.35)))
 
+    # Nothing survived the shape filters. Before giving up on the photo and
+    # cropping the whole frame, try splitting the foreground: items laid out
+    # touching each other merge into one ragged mass that no rectangle test
+    # will accept.
+    split_rescue = False
+    if not merged:
+        background = _background_mask(work)
+        coverage = float(background.mean()) / 255.0
+        if 0.05 < coverage < 0.95:
+            rescued = _split_touching(background, frame_area, cfg)
+            if len(rescued) > 1:
+                merged = _merge_candidates(
+                    rescued, float(cfg.get("iou_merge_threshold", 0.35))
+                )
+                split_rescue = True
+
     # Final confidence is dominated by whether the quad sits on the item's real
     # outer edge - the shape metrics from the detection pass only describe how
     # tidy the contour was, which says nothing about whether it is the right
@@ -438,6 +530,19 @@ def segment_image(path: Path, cfg: dict[str, Any]) -> SegmentResult:
         cand.quad = geometry.clip_quad(quad, full_w, full_h)
 
     single_frac = float(cfg.get("single_item_frac", 0.85))
+
+    if split_rescue:
+        # Every box here is a guess from a merged blob, so all of them go in
+        # front of a human rather than into the archive unseen.
+        for cand in merged:
+            cand.confidence = min(cand.confidence, 0.45)
+        result.candidates = merged
+        result.note = (
+            f"items were touching, so {len(merged)} rough crops were split out "
+            "- check and adjust each one"
+        )
+        result.needs_review = True
+        return result
 
     if not merged:
         # Nothing found. Most likely a single item shot close up, filling the

@@ -103,8 +103,12 @@ delete = false
 # in a config file is a password in your backups and your git history.
 
 [llm]
-provider = "anthropic"          # anthropic | openai | gemini | ollama | claude_cli
-model    = "claude-opus-5"
+# claude_cli runs analysis through the Claude subscription already installed on
+# this machine, so no API key is needed. Switch to "anthropic" with
+# ANTHROPIC_API_KEY set when you want batch pricing and real throughput - the
+# CLI is serial and much slower, which matters at a few hundred items.
+provider = "claude_cli"         # anthropic | openai | gemini | ollama | claude_cli
+model    = "claude-sonnet-5"
 
 # Batch runs bill at half price and are not latency-sensitive, which suits a
 # first pass over a whole collection: submit it and come back later. Turn this

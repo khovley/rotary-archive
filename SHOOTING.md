@@ -42,14 +42,22 @@ Two lamps at 45° from opposite sides also works.
 
 - **6 to 10 items per photo** is the sweet spot. More than that and each item
   gets too few pixels to transcribe reliably.
-- **Leave a clear gap** — at least a finger's width — between items. Touching
-  or overlapping items are the main cause of two pieces being merged into one.
-- **Don't overlap anything.** If an item is partly hidden, the part that's
-  hidden is gone from the archive.
+- **Leave a clear gap** — at least a finger's width — between items. This is
+  the single most common reason a batch comes out badly.
+- **Don't overlap anything.** If an item is partly hidden, the hidden part is
+  gone from the archive — no software recovers it.
 - Keep everything **fully inside the frame**, with a margin of background all
   the way around. An item running off the edge gets cropped short.
 - Group loosely by row. The software numbers items top-to-bottom then
   left-to-right, so a tidy grid makes the results easier to check.
+
+> **What happens if you don't.** Items laid edge to edge merge into one shape
+> that no rectangle test accepts. The software notices, splits the mass into
+> rough boxes, flags every one, and tells you they need adjusting — but on a
+> tightly packed collage it may find four regions where there were eight, and
+> you will spend longer dragging corners than you would have spent spreading
+> the clippings out in the first place. A finger's width of table between each
+> item is worth more than any amount of software.
 
 ## Taking the shot
 
