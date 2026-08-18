@@ -8,9 +8,9 @@ item, crops and straightens it, then reads and catalogues it with a vision
 model. You approve the results in batches, and the archive is published as a
 static site that drops into the club's WordPress page.
 
-**Status: Phases 1–3 complete.** Ingest, segmentation, rectification, LLM
-analysis, the batch review UI, and the published static site all work. Only
-uploading to the club's host is still to come — see *Roadmap* below.
+**Status: complete.** Ingest, segmentation, rectification, LLM analysis, the
+batch review UI, the published static site, and uploading to the club's host all
+work end to end.
 
 ---
 
@@ -45,6 +45,7 @@ in how well the automatic cropping works.
 | `rotary review` | Open the batch approval UI |
 | `rotary build` | Generate the published static site |
 | `rotary serve` | Serve the built site locally to check it |
+| `rotary publish` | Upload the site to the club's host (dry run by default) |
 | `rotary run` | ingest → segment → rectify, then review |
 | `rotary reset` | Discard items and crops so the pipeline can re-run |
 
@@ -106,7 +107,6 @@ the image that was approved, and a new crop is a different image.
 
 ```
 inbox/ ─► ingest ─► segment ─► rectify ─► analyze ─► review ─► build ─► publish
-                                                                          (Phase 4)
 ```
 
 **Ingest** content-addresses each photo by SHA-256, so re-dropping the same file
@@ -300,11 +300,37 @@ Both were verified against a real model on an unlabelled group photograph with
 no text of any kind: it returned no names, `date_source: unknown`, and flagged
 the item for a human.
 
-## Roadmap
+## Publishing
 
-- **Phase 4** — `rotary publish`: rsync/SFTP upload to the club's host, with a
-  dry run by default so nothing reaches a live site by accident. Until then,
-  upload `site/` however you normally would.
+See **[DEPLOY.md](DEPLOY.md)** for the full walkthrough. In short:
 
-Possible later, if the club wants it: a public "help us identify" form feeding
-corrections back into the archive, and OCR-assisted search across handwriting.
+```toml
+[publish]
+method      = "rsync"        # rsync | sftp | local
+host        = "yourclub.org"
+user        = "your-ssh-username"
+remote_path = "/home/you/public_html/history"
+```
+
+```bash
+rotary publish              # preview: what would change, nothing sent
+rotary publish --execute    # upload, after one more confirmation
+```
+
+Three safety properties, because this is the one stage that reaches outside the
+machine and cannot be undone from here:
+
+- **Dry run is the default.** Uploading takes `--execute`, and then asks again.
+- **Deletion is opt-in and needs both flags.** `--delete` alone is still a
+  preview. The target directory may hold files this tool did not put there.
+- **No password is ever handled here.** Transfers shell out to the system
+  `ssh`, so keys and agents work as usual and nothing secret sits in
+  `config.toml` — or in your backups and git history.
+
+A build older than the last change to the archive is flagged before anything is
+sent, and `archive.db` is on a hard exclusion list that config cannot override.
+
+## Possible later
+
+If the club wants it: a public "help us identify" form feeding corrections back
+into the archive, and OCR-assisted search across handwriting.

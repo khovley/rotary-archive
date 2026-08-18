@@ -70,6 +70,7 @@ class Config:
     review: dict[str, Any] = field(default_factory=dict)
     llm: dict[str, Any] = field(default_factory=dict)
     site: dict[str, Any] = field(default_factory=dict)
+    publish: dict[str, Any] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -120,5 +121,6 @@ def load_config(root: Path | None = None) -> Config:
         review=data.get("review", {}),
         llm=data.get("llm", {}),
         site=data.get("site", {}),
+        publish=data.get("publish", {}),
         raw=data,
     )

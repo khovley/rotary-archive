@@ -478,6 +478,113 @@ def serve(
     _serve_site(cfg, port)
 
 
+# ---------------------------------------------------------------- publish ---
+
+
+@app.command()
+def publish(
+    execute: bool = typer.Option(
+        False,
+        "--execute",
+        help="Actually upload. Without this, nothing leaves your machine.",
+    ),
+    delete: Optional[bool] = typer.Option(
+        None,
+        "--delete/--no-delete",
+        help="Remove remote files not in this build. Overrides config.",
+    ),
+    yes: bool = typer.Option(False, "--yes", help="Skip the confirmation prompt."),
+) -> None:
+    """Upload the built site to the club's host.
+
+    Dry run by default: it shows exactly what would change and sends nothing.
+    Add --execute once the preview looks right.
+    """
+    from .publish import PublishError, preflight, publish as do_publish
+
+    cfg, conn = _load()
+    conn.close()
+
+    checks = preflight(cfg.paths, cfg.publish, approved_only_expected=execute)
+
+    console.print(f"Target: [bold]{checks.target}[/bold]")
+    if checks.files:
+        console.print(
+            f"[dim]Local build: {checks.files} files, {checks.megabytes} MB[/dim]"
+        )
+
+    for problem in checks.problems:
+        console.print(f"[red]  {problem}[/red]")
+    if not checks.ok:
+        raise typer.Exit(code=2)
+    for warning in checks.warnings:
+        console.print(f"[yellow]  {warning}[/yellow]")
+
+    dry_run = not execute
+
+    if execute and not yes:
+        # A live upload is outward-facing and hard to undo, so it gets an
+        # explicit yes even though --execute was already typed. The preview is
+        # one keystroke away and costs nothing.
+        console.print(
+            f"\n[bold]About to upload {checks.files} file(s) "
+            f"({checks.megabytes} MB) to {checks.target}[/bold]"
+        )
+        if delete or (delete is None and cfg.publish.get("delete")):
+            console.print(
+                "[red]Deletion is enabled: remote files not in this build will "
+                "be removed.[/red]"
+            )
+        if not typer.confirm("Publish now?"):
+            console.print("Cancelled. Nothing was sent.")
+            raise typer.Exit()
+
+    try:
+        result = do_publish(
+            cfg.paths, cfg.publish, dry_run=dry_run, delete=delete
+        )
+    except PublishError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+
+    console.print(f"[dim]$ {result.command}[/dim]")
+
+    if dry_run:
+        if not result.changed and not result.deleted:
+            console.print("[green]Already up to date - nothing to upload.[/green]")
+            return
+
+        console.print(
+            f"\n[bold]{len(result.changed)} file(s) would be uploaded[/bold]"
+        )
+        for name in result.changed[:25]:
+            console.print(f"  [green]+[/green] {name}")
+        if len(result.changed) > 25:
+            console.print(f"  [dim]... and {len(result.changed) - 25} more[/dim]")
+
+        if result.deleted:
+            console.print(
+                f"\n[bold red]{len(result.deleted)} remote file(s) would be "
+                f"DELETED[/bold red]"
+            )
+            for name in result.deleted[:25]:
+                console.print(f"  [red]-[/red] {name}")
+            if len(result.deleted) > 25:
+                console.print(f"  [dim]... and {len(result.deleted) - 25} more[/dim]")
+
+        console.print(
+            "\n[dim]This was a preview. Nothing was sent.[/dim]\n"
+            "Run [bold]rotary publish --execute[/bold] to upload."
+        )
+        return
+
+    console.print(
+        f"[green]Uploaded {len(result.changed)} file(s)[/green]"
+        + (f", deleted {len(result.deleted)}" if result.deleted else "")
+    )
+    console.print("[dim]Check the live page before telling anyone about it.[/dim]")
+
+
 # -------------------------------------------------------------------- run ---
 
 

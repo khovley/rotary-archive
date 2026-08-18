@@ -70,6 +70,38 @@ detail_image_size = 1600
 thumb_image_size  = 320
 card_image_size   = 800
 
+[publish]
+# How to upload the built site. "rsync" transfers only what changed and is the
+# right choice when the host offers SSH. "sftp" is the fallback for hosts that
+# allow file transfer but not rsync; it re-uploads everything each time.
+# "local" copies to a directory on this machine - useful for testing, or for a
+# host you sync some other way (Dropbox, a mounted volume).
+method = "rsync"                # rsync | sftp | local
+
+host = ""                       # e.g. "yourclub.org"
+user = ""                       # SSH username
+port = 22
+remote_path = ""                # e.g. "/home/you/public_html/history"
+
+# Optional path to a specific SSH key. Leave empty to let SSH use your agent
+# and ~/.ssh/config, which is the usual case.
+identity = ""
+
+# For method = "local": where to copy to.
+local_path = ""
+
+# Never uploaded, whatever else happens.
+exclude = [".DS_Store", "Thumbs.db", "*.map"]
+
+# Remove remote files that are not in the local build. Off by default: the
+# target directory may contain files this tool did not put there, and deleting
+# a stranger's files on a live club site is not recoverable from here.
+delete = false
+
+# There is deliberately no password setting. Authentication is left to your
+# SSH agent, key, or an interactive prompt from ssh itself - a password sitting
+# in a config file is a password in your backups and your git history.
+
 [llm]
 provider = "anthropic"          # anthropic | openai | gemini | ollama | claude_cli
 model    = "claude-opus-5"
