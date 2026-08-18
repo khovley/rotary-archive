@@ -24,7 +24,16 @@ max_area_frac = 0.90
 max_aspect_ratio = 8.0
 
 # Reject ragged shapes (hands, folds, cast shadows). contour_area / hull_area.
-min_solidity = 0.80
+# Deliberately permissive: real clippings are often cut around a headline or a
+# photo, so an L or T shape is normal rather than a sign of a bad detection.
+# 0.80 rejected genuine clippings; a hand or a cast shadow still scores well
+# below 0.55.
+min_solidity = 0.55
+
+# How much of its own fitted quad a contour must fill. An L-shaped clipping
+# only fills about half its bounding box, so this has to stay low; the crop
+# still contains the whole item, with some table showing in the notch.
+min_fill = 0.42
 
 # Two candidates overlapping more than this are treated as the same item.
 iou_merge_threshold = 0.35

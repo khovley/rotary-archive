@@ -308,6 +308,25 @@
     app.querySelectorAll(".card").forEach((card) => {
       card.addEventListener("click", () => selectItem(card.dataset.item));
     });
+
+    // The thumbnail opens the full-resolution master, not the 800px
+    // derivative - the point is to see whether the crop clipped anything.
+    app.querySelectorAll(".card .thumb").forEach((img) => {
+      img.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        const id = img.closest(".card").dataset.item;
+        selectItem(id);
+        openLightbox(`/media/item/${id}?full=1`, id);
+      });
+    });
+
+    app.querySelectorAll(".source img").forEach((img) => {
+      img.addEventListener("click", () => {
+        const sha = img.closest(".photo").dataset.photo;
+        const photo = state.photos.find((p) => p.sha256 === sha);
+        openLightbox(`/media/photo/${sha}?full=1`, photo ? photo.name : sha);
+      });
+    });
   }
 
   async function reanalyze(id, button) {
@@ -532,6 +551,17 @@
   document.addEventListener("keydown", async (ev) => {
     if (ev.target.matches("input, textarea")) return;
 
+    if (!$("#lightbox").hidden) {
+      // The lightbox owns the keyboard while it is open.
+      const key = ev.key;
+      if (key === "Escape") { ev.preventDefault(); closeLightbox(); }
+      else if (key === "+" || key === "=") { ev.preventDefault(); zoomLightbox(1.25); }
+      else if (key === "-" || key === "_") { ev.preventDefault(); zoomLightbox(1 / 1.25); }
+      else if (key === "0") { ev.preventDefault(); fitLightbox(); }
+      else if (key === "1") { ev.preventDefault(); $("#lb-full").click(); }
+      return;
+    }
+
     if (ev.key === "Escape") {
       if (!$("#intake").hidden) { closeIntake(); return; }
       if (state.fieldEditing) { closeFieldEditor(); return; }
@@ -562,6 +592,9 @@
         ev.preventDefault(); openEditor(state.selected);
       } else if (key === "e" && state.selected) {
         ev.preventDefault(); openFieldEditor(state.selected);
+      } else if (key === "z" && state.selected) {
+        ev.preventDefault();
+        openLightbox(`/media/item/${state.selected}?full=1`, state.selected);
       } else if (key === "p" && state.selected) {
         ev.preventDefault();
         const found = findItem(state.selected);
@@ -585,6 +618,120 @@
     if (at < 0) return null;
     const following = items[at + 1] || items[at - 1];
     return following ? following.id : null;
+  }
+
+  // ------------------------------------------------------------ lightbox --
+
+  /* Judging whether a crop clipped a headline needs real pixels. Thumbnails
+     are 172px wide; this opens the full-resolution master. */
+
+  const lb = {
+    scale: 1, x: 0, y: 0, natural: [0, 0], panning: false, from: null,
+  };
+
+  function openLightbox(src, title) {
+    const img = $("#lb-img");
+    $("#lb-title").textContent = title || "";
+    $("#lightbox").hidden = false;
+
+    img.onload = () => {
+      lb.natural = [img.naturalWidth, img.naturalHeight];
+      fitLightbox();
+    };
+    // Cache-bust so a re-cropped item never shows the previous version.
+    img.src = src.includes("?") ? src : `${src}?v=${Date.now()}`;
+  }
+
+  function closeLightbox() {
+    $("#lightbox").hidden = true;
+    $("#lb-img").src = "";
+  }
+
+  function applyLightbox() {
+    const img = $("#lb-img");
+    img.style.width = `${lb.natural[0]}px`;
+    img.style.height = `${lb.natural[1]}px`;
+    img.style.transform =
+      `translate(${lb.x}px, ${lb.y}px) scale(${lb.scale})`;
+    $("#lb-zoom").textContent = `${Math.round(lb.scale * 100)}%`;
+  }
+
+  function fitLightbox() {
+    const stage = $("#lb-stage").getBoundingClientRect();
+    const [w, h] = lb.natural;
+    if (!w || !h) return;
+    // Never scale a small crop above 1:1 on "fit" - blowing up a 300px
+    // thumbnail to fill a 4K screen just shows interpolation, not detail.
+    lb.scale = Math.min(stage.width / w, stage.height / h, 1);
+    lb.x = (stage.width - w * lb.scale) / 2;
+    lb.y = (stage.height - h * lb.scale) / 2;
+    applyLightbox();
+  }
+
+  function zoomLightbox(factor, originX, originY) {
+    const stage = $("#lb-stage").getBoundingClientRect();
+    const cx = originX ?? stage.width / 2;
+    const cy = originY ?? stage.height / 2;
+    const next = Math.min(8, Math.max(0.05, lb.scale * factor));
+    // Keep the point under the cursor fixed while zooming.
+    lb.x = cx - (cx - lb.x) * (next / lb.scale);
+    lb.y = cy - (cy - lb.y) * (next / lb.scale);
+    lb.scale = next;
+    applyLightbox();
+  }
+
+  function wireLightbox() {
+    const stage = $("#lb-stage");
+
+    $("#lb-close").addEventListener("click", closeLightbox);
+    $("#lb-fit").addEventListener("click", fitLightbox);
+    $("#lb-in").addEventListener("click", () => zoomLightbox(1.25));
+    $("#lb-out").addEventListener("click", () => zoomLightbox(1 / 1.25));
+    $("#lb-full").addEventListener("click", () => {
+      const rect = stage.getBoundingClientRect();
+      lb.x = (rect.width - lb.natural[0]) / 2;
+      lb.y = (rect.height - lb.natural[1]) / 2;
+      lb.scale = 1;
+      applyLightbox();
+    });
+
+    stage.addEventListener("wheel", (ev) => {
+      ev.preventDefault();
+      const rect = stage.getBoundingClientRect();
+      zoomLightbox(
+        ev.deltaY < 0 ? 1.15 : 1 / 1.15,
+        ev.clientX - rect.left, ev.clientY - rect.top
+      );
+    }, { passive: false });
+
+    stage.addEventListener("pointerdown", (ev) => {
+      lb.panning = true;
+      lb.from = [ev.clientX - lb.x, ev.clientY - lb.y];
+      stage.classList.add("panning");
+      stage.setPointerCapture(ev.pointerId);
+    });
+    stage.addEventListener("pointermove", (ev) => {
+      if (!lb.panning) return;
+      lb.x = ev.clientX - lb.from[0];
+      lb.y = ev.clientY - lb.from[1];
+      applyLightbox();
+    });
+    ["pointerup", "pointercancel"].forEach((type) =>
+      stage.addEventListener(type, () => {
+        lb.panning = false;
+        stage.classList.remove("panning");
+      })
+    );
+
+    // Clicking the backdrop closes; clicking the image does not, or panning
+    // would dismiss the thing you are trying to inspect.
+    stage.addEventListener("click", (ev) => {
+      if (ev.target === stage) closeLightbox();
+    });
+
+    window.addEventListener("resize", () => {
+      if (!$("#lightbox").hidden) fitLightbox();
+    });
   }
 
   // ----------------------------------------------------------- add photos --
@@ -731,6 +878,8 @@
   }
 
   // ---------------------------------------------------------------- boot --
+
+  wireLightbox();
 
   document.querySelectorAll(".segmented button").forEach((btn) => {
     btn.addEventListener("click", () => {

@@ -360,3 +360,59 @@ kbd {
 @media (prefers-reduced-motion: reduce) { .run-bar span { transition: none; } }
 .run-progress p { margin: .4rem 0 0; font-size: 12px; }
 .run-counts { font: 11.5px/1.5 var(--mono); }
+
+/* ---------------------------------------------------------- lightbox -- */
+
+/* Judging a crop needs pixels, not a 172px thumbnail. This sits above
+   everything, including the editors, so it can be opened from inside them. */
+.lightbox[hidden] { display: none; }
+.lightbox {
+  position: fixed; inset: 0; z-index: 80;
+  background: rgba(12, 12, 14, .93);
+  display: flex; flex-direction: column;
+}
+.lb-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 1rem; padding: .45rem .7rem;
+  background: rgba(0, 0, 0, .55); color: #f2f0ec;
+  border-bottom: 1px solid rgba(255, 255, 255, .12);
+}
+.lb-title { font: 12px/1.4 var(--mono); opacity: .85; }
+.lb-tools { display: flex; align-items: center; gap: .3rem; }
+.lb-tools button {
+  background: rgba(255, 255, 255, .1); color: #f2f0ec;
+  border-color: rgba(255, 255, 255, .18);
+}
+.lb-tools button:hover { background: rgba(255, 255, 255, .2); }
+.lb-tools button.primary { background: var(--accent); border-color: transparent; }
+.lb-zoom {
+  min-width: 3.4rem; text-align: center;
+  font: 12px/1 var(--mono); opacity: .85;
+}
+
+.lb-stage {
+  flex: 1; overflow: hidden; position: relative;
+  display: flex; align-items: center; justify-content: center;
+  cursor: grab; touch-action: none;
+}
+.lb-stage.panning { cursor: grabbing; }
+.lb-stage img {
+  position: absolute; transform-origin: 0 0;
+  image-rendering: auto; user-select: none; -webkit-user-drag: none;
+  /* A checkerboard behind the image makes a crop that clipped into the table
+     obvious - a dark edge against dark backdrop otherwise reads as nothing. */
+  background:
+    repeating-conic-gradient(#3a3a3d 0 25%, #2c2c2f 0 50%) 0 0 / 18px 18px;
+}
+.lb-hint {
+  padding: .4rem .7rem; margin: 0; text-align: center;
+  font-size: 11.5px; color: rgba(242, 240, 236, .6);
+  background: rgba(0, 0, 0, .45);
+}
+.lb-hint kbd {
+  background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.2);
+  color: inherit;
+}
+
+/* Anything clickable into the lightbox says so on hover. */
+.thumb, .source img { cursor: zoom-in; }

@@ -136,10 +136,18 @@ def _background_mask(bgr: np.ndarray) -> np.ndarray:
 
     _, mask = cv2.threshold(distance, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13))
+    # Opening removes speckle. Closing is kept deliberately small: it bridges
+    # gaps, and the gaps that matter here are the ones *between* items. A
+    # 13x13 kernel over three iterations reaches roughly 40px, which is wider
+    # than the space people leave between clippings - it welded eight of them
+    # into one 50%-of-frame blob that no shape test could accept.
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=2)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=3)
-    # Fill interior holes so a pale photo mount reads as one solid item.
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+
+    # Interior holes are filled by redrawing each outline solid, which is the
+    # right tool for the job: it closes a hole of any size without reaching
+    # across the gap to a neighbour, as a larger kernel would.
     filled = mask.copy()
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cv2.drawContours(filled, contours, -1, 255, thickness=cv2.FILLED)
@@ -208,7 +216,7 @@ def _candidates_from_mask(
         # a shadow.
         qarea = geometry.quad_area(quad)
         fill = float(area / qarea) if qarea > 0 else 0.0
-        if fill < 0.60:
+        if fill < float(cfg.get("min_fill", 0.42)):
             continue
 
         # Confidence blends shape quality with fit type. It drives which items

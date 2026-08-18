@@ -44,6 +44,25 @@
 
 <div id="toast" class="toast" hidden></div>
 
+<!-- Lightbox: inspect a crop or a source photo at full size. -->
+<div id="lightbox" class="lightbox" hidden>
+  <div class="lb-bar">
+    <span id="lb-title" class="lb-title"></span>
+    <span class="lb-tools">
+      <button id="lb-out" title="Zoom out (-)">&minus;</button>
+      <span id="lb-zoom" class="lb-zoom">100%</span>
+      <button id="lb-in" title="Zoom in (+)">+</button>
+      <button id="lb-fit" title="Fit to window (0)">Fit</button>
+      <button id="lb-full" title="Actual size (1)">1:1</button>
+      <button id="lb-close" class="primary" title="Close (Esc)">Close</button>
+    </span>
+  </div>
+  <div id="lb-stage" class="lb-stage">
+    <img id="lb-img" alt="">
+  </div>
+  <p class="lb-hint muted">Drag to pan · scroll to zoom · <kbd>Esc</kbd> to close</p>
+</div>
+
 <!-- Add photos: a folder for bulk, a drop zone for the odd few. -->
 <div id="intake" class="modal" hidden>
   <div class="modal-inner">

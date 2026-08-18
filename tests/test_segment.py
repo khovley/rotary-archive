@@ -172,3 +172,55 @@ def test_reading_order_is_top_to_bottom_then_left_to_right(tmp_path, seg_config)
     centres = [c.quad.mean(axis=0) for c in result.candidates]
     rows = [(round(c[1] / 500), c[0]) for c in centres]
     assert rows == sorted(rows), f"out of order: {rows}"
+
+
+def test_small_gaps_between_items_are_not_bridged(tmp_path, seg_config):
+    """Morphology must not weld neighbouring items into one blob.
+
+    A closing kernel wide enough to reach across the gap people actually leave
+    between clippings merged eight of them into a single 50%-of-frame shape
+    that no rectangle test would accept, so the photo produced no items at all.
+    Hole-filling is done by redrawing contours solid instead, which closes a
+    hole of any size without reaching sideways to a neighbour.
+    """
+    path = tmp_path / "tight.jpg"
+    # A dense grid packs items close together, which is where bridging shows.
+    truth = make_table_shot(path, n_items=10, seed=13)
+    result = segment_image(path, seg_config)
+
+    assert len(result.candidates) == len(truth)
+    biggest = max(c.area_frac for c in result.candidates)
+    assert biggest < 0.25, (
+        f"largest detection covers {biggest:.0%} of the frame - items look merged"
+    )
+
+
+def test_irregular_clippings_are_not_rejected(tmp_path, seg_config):
+    """A clipping cut around a headline is L-shaped, not rectangular.
+
+    The solidity and fill filters existed to throw out hands and cast shadows,
+    but at their original settings they also threw out genuine clippings whose
+    outline juts out to keep a headline or photo attached.
+    """
+    import cv2
+    import numpy as np
+
+    canvas = np.full((1400, 1100, 3), 26, np.uint8)
+    # An L: a wide headline band with a narrower column hanging below it.
+    cv2.rectangle(canvas, (150, 200), (950, 420), (232, 228, 216), -1)
+    cv2.rectangle(canvas, (150, 420), (560, 1150), (232, 228, 216), -1)
+    for y in range(460, 1120, 34):
+        cv2.rectangle(canvas, (185, y), (520, y + 12), (40, 40, 40), -1)
+    cv2.rectangle(canvas, (190, 240), (900, 300), (30, 30, 30), -1)
+    path = tmp_path / "ell.jpg"
+    cv2.imwrite(str(path), canvas)
+
+    result = segment_image(path, seg_config)
+
+    assert len(result.candidates) == 1, "the L-shaped clipping was not found"
+    quad = result.candidates[0].quad
+    x0, y0, x1, y1 = geometry.quad_bbox(quad)
+    # The crop must contain the whole item, headline band included, rather
+    # than trimming to the tidy rectangular column.
+    assert x0 <= 175 and y0 <= 225
+    assert x1 >= 925 and y1 >= 1125

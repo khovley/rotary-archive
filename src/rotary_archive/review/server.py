@@ -234,6 +234,14 @@ def safe_upload_name(raw: str) -> str:
     return name
 
 
+def _guess_media_type(path: Path) -> str:
+    return {
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+        ".webp": "image/webp", ".gif": "image/gif", ".tif": "image/tiff",
+        ".tiff": "image/tiff", ".heic": "image/heic", ".heif": "image/heif",
+    }.get(path.suffix.lower(), "application/octet-stream")
+
+
 def _static_file(name: str) -> bytes | None:
     try:
         return (
@@ -394,6 +402,12 @@ class Handler(BaseHTTPRequestHandler):
     def _conn(self) -> sqlite3.Connection:
         return db.connect(self.cfg.paths.database, create=False)
 
+    def _wants_full(self) -> bool:
+        """True when the caller asked for the original rather than a preview."""
+        from urllib.parse import parse_qs
+
+        return "1" in parse_qs(urlparse(self.path).query).get("full", [])
+
     # ---------------------------------------------------------------- GET --
 
     def do_GET(self) -> None:  # noqa: N802
@@ -468,6 +482,16 @@ class Handler(BaseHTTPRequestHandler):
                 photo = db.get_photo(conn, sha)
                 if photo is None:
                     raise FileNotFoundError(sha)
+                # The grid uses a 1400px preview; the lightbox asks for the
+                # original, because the whole point of opening it is to see
+                # detail the preview threw away.
+                if self._wants_full():
+                    source = self.cfg.paths.absolute(photo["stored_path"])
+                    if source.exists():
+                        return self._send(
+                            200, source.read_bytes(),
+                            _guess_media_type(source), cache=True,
+                        )
                 data = _photo_preview(self.cfg, photo)
             finally:
                 conn.close()
@@ -481,6 +505,17 @@ class Handler(BaseHTTPRequestHandler):
                 item = db.get_item(conn, item_id)
             finally:
                 conn.close()
+
+            # The lightbox wants the archival master; the grid wants something
+            # small. Serving the master to a grid of 200 thumbnails would move
+            # hundreds of megabytes for no visible gain.
+            if self._wants_full() and item is not None and item["master_path"]:
+                master = self.cfg.paths.absolute(item["master_path"])
+                if master.exists():
+                    return self._send(
+                        200, master.read_bytes(),
+                        _guess_media_type(master), cache=True,
+                    )
 
             # Prefer the 800px derivative for the review grid; fall back through
             # whatever exists, then to the master.
