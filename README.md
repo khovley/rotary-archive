@@ -8,8 +8,8 @@ each item, crops and straightens it, and (from Phase 2) reads and catalogues it
 with an LLM. You approve the results in batches, and the archive is published as
 a static site that drops into the club's WordPress site.
 
-**Status: Phase 1 complete.** Ingest, segmentation, rectification, and the
-batch review UI all work. LLM analysis, the site builder, and publishing are
+**Status: Phases 1–2 complete.** Ingest, segmentation, rectification, LLM
+analysis, and the batch review UI all work. The site builder and publishing are
 still to come — see *Roadmap* below.
 
 ---
@@ -41,6 +41,7 @@ in how well the automatic cropping works.
 | `rotary ingest` | Copy photos from `inbox/` into the archive, skipping duplicates |
 | `rotary segment` | Find the individual items in each photo |
 | `rotary rectify` | Crop, deskew, and write masters plus web derivatives |
+| `rotary analyze` | Read and catalogue each item with a vision model |
 | `rotary review` | Open the batch approval UI |
 | `rotary run` | ingest → segment → rectify, then review |
 | `rotary reset` | Discard items and crops so the pipeline can re-run |
@@ -48,8 +49,18 @@ in how well the automatic cropping works.
 Every stage skips work that's already done, so `rotary run` after adding new
 photos only processes the new ones. An interrupted run can simply be restarted.
 
-`--force` on `segment` or `rectify` re-does completed work. Note that
-`segment --force` discards manual crop corrections.
+`--force` on `segment`, `rectify`, or `analyze` re-does completed work. Note
+that `segment --force` discards manual crop corrections.
+
+**`analyze` is the only command that costs money**, so it is deliberately not
+part of `rotary run` unless you ask for it with `rotary run --analyze`. It
+prints a cost estimate and asks for confirmation before sending anything:
+
+```bash
+rotary analyze --dry-run      # what would be sent, and what it would cost
+rotary analyze --limit 10     # a trial run before committing to the whole lot
+rotary analyze                # the real thing
+```
 
 ---
 
@@ -65,12 +76,22 @@ Built for getting through hundreds of items quickly.
   one by dragging its corners. Both re-crop from the original full-resolution
   photo, not the preview.
 
+Once items are analysed, each card also shows the catalogue reading: title,
+type, date, entity chips, and the transcription. A date the model **deduced**
+is marked `~` and coloured differently from one **printed** on the item —
+collapsing those two would let a guess harden into a fact the club believes.
+
+**Edit** corrects any field; the correction is saved as a new revision with
+provider `human`, so the model's original reading survives beside it.
+**Re-read** sends that one item back to the model.
+
 | Key | Action |
 |---|---|
 | `J` / `K` | next / previous item |
 | `A` / `X` | approve / reject |
 | `R` | rotate 90° |
 | `C` | open the crop editor |
+| `E` | edit catalogue fields |
 | `P` | approve the rest of this photo |
 | `Shift`+`A` | approve everything visible |
 
@@ -82,8 +103,8 @@ the image that was approved, and a new crop is a different image.
 ## How it works
 
 ```
-inbox/ ──► ingest ──► segment ──► rectify ──► review ──► build ──► publish
-                                                          (Phase 3)  (Phase 4)
+inbox/ ─► ingest ─► segment ─► rectify ─► analyze ─► review ─► build ─► publish
+                                                                (Phase 3) (Phase 4)
 ```
 
 **Ingest** content-addresses each photo by SHA-256, so re-dropping the same file
@@ -116,9 +137,55 @@ accumulator's theta step, and it reported exactly 0.0° for visibly crooked
 scans. Post-warp corrections are fractions of a degree, which is the difference
 between "scanned" and "photographed" for newsprint.
 
+**Analyze** sends one image per item — the 1600px derivative, not the master,
+which halves the image tokens with no legibility loss on an already-rectified
+crop. The system prompt is byte-identical for every item and sits ahead of the
+image, so it caches and bills at roughly a tenth of the input rate after the
+first call; the whole pass goes through the Batch API at half price. Responses
+are constrained to a JSON schema, then normalised — a model that answers `85`
+for a 0–1 confidence, or a comma-joined string where a list was asked for, gets
+coerced rather than discarded.
+
 **SQLite is the source of truth.** Analyses are versioned rather than
 overwritten, so re-running with a better model later keeps the history and never
-requires re-shooting or re-cropping anything.
+requires re-shooting or re-cropping anything. Human corrections are written as
+new revisions with provider `human`, and human-added entity links survive a
+re-analysis — otherwise correcting the archive would be pointless.
+
+## Swapping the model
+
+Everything above the provider layer is model-agnostic. Change one line in
+`config.toml`:
+
+```toml
+[llm]
+provider = "anthropic"   # anthropic | openai | gemini | ollama | claude_cli
+model    = "claude-opus-5"
+```
+
+| Provider | Notes |
+|---|---|
+| `anthropic` | Default. Batch API, prompt caching, schema-constrained output. |
+| `openai` | Needs `OPENAI_API_KEY` and the `[openai]` extra. |
+| `gemini` | Needs `GEMINI_API_KEY` and the `[gemini]` extra. |
+| `ollama` | **Local and free.** No dependency, no data leaves the machine. Slower and less accurate — good for a first pass a human then corrects. |
+| `claude_cli` | Runs through an existing Claude subscription rather than per-token API billing. Serial and slower; fine for tens of items, not thousands. |
+
+Providers without a batch endpoint get a bounded thread pool instead, so the
+CLI behaves identically either way. Providers that can't be schema-constrained
+get the schema in the prompt and their output validated on return.
+
+## What it costs
+
+Estimated before every run and shown for confirmation. For 500 items:
+
+| Model | Batch | Sync |
+|---|---|---|
+| `claude-opus-5` | ~$8.60 | ~$17.20 |
+| `claude-sonnet-5` | ~$5.20 | ~$10.30 |
+| `claude-haiku-4-5` | ~$1.70 | ~$3.40 |
+
+`ollama` is free; `claude_cli` bills to your subscription rather than per token.
 
 ---
 
@@ -161,16 +228,25 @@ are the irreplaceable files, and the rest can always be regenerated from them.
 
 ---
 
+## Two rules the cataloguing prompt enforces
+
+**Never name a person you cannot read.** Names come only from text on the item —
+a caption, a byline, a certificate. Never from a face, a uniform, or a
+resemblance. An unidentified group photograph gets an empty `people` list and a
+flag asking a club member to help. A confident wrong name is far worse than an
+honest gap, because it gets copied and believed for decades.
+
+**Never invent a date.** `date_source` records `printed`, `inferred`, or
+`unknown`; an inferred date must carry its reasoning in `date_note`; and a date
+with no value can never claim to be printed, whatever the model returned. The
+review UI and the site display the three differently.
+
+Both were verified against a real model on an unlabelled group photograph with
+no text of any kind: it returned no names, `date_source: unknown`, and flagged
+the item for a human.
+
 ## Roadmap
 
-- **Phase 2** — LLM analysis. Transcription, dating, entity extraction, and the
-  keep-as-image vs convert-to-text decision. Provider-agnostic: Claude by
-  default, with OpenAI, Gemini, and local Ollama adapters behind one interface.
 - **Phase 3** — Static site: timeline, client-side search, people and topic
   indexes, item detail pages.
 - **Phase 4** — Publishing and the WordPress/Elementor embed.
-
-Two rules already designed into the schema for Phase 2: never guess who is in an
-unlabelled photograph (names come only from captions and printed text), and never
-fabricate a date — `date_source` records whether a date was printed, inferred, or
-is unknown, and the site will display those differently.

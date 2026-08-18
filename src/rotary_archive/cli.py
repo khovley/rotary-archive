@@ -225,6 +225,120 @@ def rectify(
     _do_rectify(cfg, conn, force)
 
 
+# ---------------------------------------------------------------- analyze ---
+
+
+def _do_analyze(
+    cfg: Config,
+    conn: sqlite3.Connection,
+    *,
+    force: bool,
+    limit: int | None,
+    dry_run: bool,
+    yes: bool,
+) -> int:
+    from .analyze import analyze_items, items_to_analyze
+    from .providers import ProviderError, build_provider
+
+    pending = items_to_analyze(conn, force=force, limit=limit)
+    if not pending:
+        console.print("No items waiting to be analysed.")
+        return 0
+
+    try:
+        provider = build_provider(cfg.llm)
+    except ProviderError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=2)
+
+    console.print(
+        f"{len(pending)} item(s) to analyse with "
+        f"[bold]{provider.name}[/bold] / [bold]{provider.model}[/bold]"
+    )
+
+    estimate = provider.estimate_cost(len(pending))
+    if estimate:
+        if estimate.get("usd"):
+            console.print(
+                f"[yellow]Estimated cost: ~${estimate['usd']:.2f} "
+                f"(~${estimate['usd_per_item']:.4f}/item"
+                f"{', batch pricing' if estimate.get('batch') else ''})[/yellow]"
+            )
+        elif estimate.get("note"):
+            console.print(f"[dim]{estimate['note']}[/dim]")
+        elif estimate.get("local"):
+            console.print("[dim]Runs locally; no per-item cost.[/dim]")
+
+    if dry_run:
+        console.print("[dim]--dry-run: nothing sent.[/dim]")
+        for item in pending[:10]:
+            console.print(f"  {item['id']}")
+        if len(pending) > 10:
+            console.print(f"  ... and {len(pending) - 10} more")
+        return 0
+
+    # Only gate on spend. A free local run has nothing to confirm.
+    costly = bool(estimate and estimate.get("usd"))
+    if costly and not yes and not typer.confirm("Send these for analysis?"):
+        console.print("Cancelled.")
+        raise typer.Exit()
+
+    def on_result(result) -> None:
+        status = result.data.get("_status") if result.data else None
+        if status == "submitted":
+            console.print(
+                f"[dim]Batch {result.data['_batch_id']} submitted with "
+                f"{result.data['_count']} item(s). This can take a while.[/dim]"
+            )
+        elif status == "waiting":
+            done = result.data.get("_succeeded")
+            console.print(f"[dim]  ...waiting (succeeded so far: {done})[/dim]")
+        elif not result.ok:
+            console.print(f"[red]  {result.item_id}: {result.error}[/red]")
+
+    try:
+        summary = analyze_items(
+            conn, cfg.paths, provider, cfg.llm,
+            force=force, limit=limit, progress=on_result,
+        )
+    except ProviderError as exc:
+        # A whole-run condition (credentials, endpoint). Anything already
+        # analysed is committed; re-running picks up where this stopped.
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=2)
+
+    console.print(
+        f"[green]Analysed {summary.succeeded}[/green] item(s); "
+        f"{summary.flagged} flagged for review"
+    )
+    if summary.failed:
+        console.print(f"[red]{summary.failed} failed[/red]")
+        for item_id, error in summary.errors[:5]:
+            console.print(f"  [red]{item_id}: {error}[/red]")
+        if len(summary.errors) > 5:
+            console.print(f"  [dim]... and {len(summary.errors) - 5} more[/dim]")
+        console.print("[dim]Re-run `rotary analyze` to retry the failures.[/dim]")
+    return summary.succeeded
+
+
+@app.command()
+def analyze(
+    force: bool = typer.Option(
+        False, "--force", help="Re-analyse items that already have an analysis."
+    ),
+    limit: Optional[int] = typer.Option(
+        None, "--limit", help="Only analyse this many items (useful for a trial run)."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what would be sent and the cost, then stop."
+    ),
+    yes: bool = typer.Option(False, "--yes", help="Skip the cost confirmation."),
+) -> None:
+    """Read and catalogue each item with a vision model."""
+    cfg, conn = _load()
+    _do_analyze(cfg, conn, force=force, limit=limit, dry_run=dry_run, yes=yes)
+
+
 # ----------------------------------------------------------------- review ---
 
 
@@ -263,15 +377,26 @@ def review(
 @app.command()
 def run(
     move: bool = typer.Option(False, "--move", help="Delete inbox copies after archiving."),
-    no_review: bool = typer.Option(
-        False, "--no-review", help="Stop after rectify instead of opening review."
+    analyze_too: bool = typer.Option(
+        False, "--analyze", help="Also run LLM analysis (this costs money)."
     ),
+    no_review: bool = typer.Option(
+        False, "--no-review", help="Stop before opening the review UI."
+    ),
+    yes: bool = typer.Option(False, "--yes", help="Skip the analysis cost confirmation."),
 ) -> None:
-    """Ingest, segment, and rectify everything new, then open review."""
+    """Ingest, segment, and rectify everything new, then open review.
+
+    Analysis is opt-in via --analyze. Ingest, segment, and rectify are free and
+    local, so `run` stays free by default and never spends money by surprise.
+    """
     cfg, conn = _load()
     _do_ingest(cfg, conn, move)
     _do_segment(cfg, conn, force=False)
     _do_rectify(cfg, conn, force=False)
+    if analyze_too:
+        console.print()
+        _do_analyze(cfg, conn, force=False, limit=None, dry_run=False, yes=yes)
     console.print()
     _do_status(cfg, conn)
     if no_review:

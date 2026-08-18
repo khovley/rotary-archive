@@ -83,9 +83,40 @@ def _photo_preview(cfg: Config, photo: sqlite3.Row) -> bytes:
     return data
 
 
+ANALYSIS_FIELDS = (
+    "item_type", "title", "summary", "full_text",
+    "date_value", "date_precision", "date_source", "date_note",
+    "presentation", "legibility", "condition_notes", "alt_text",
+    "rotary_context", "orientation_hint", "confidence",
+)
+
+# Fields a human may correct in the review UI. Everything else is the model's
+# reading and is left alone.
+EDITABLE_FIELDS = frozenset(
+    {
+        "item_type", "title", "summary", "full_text",
+        "date_value", "date_precision", "date_source",
+        "presentation", "condition_notes", "alt_text", "rotary_context",
+    }
+)
+
+
+def _entities_for(conn: sqlite3.Connection, item_id: str) -> dict[str, list[str]]:
+    rows = conn.execute(
+        "SELECT e.kind, e.name FROM item_entities ie "
+        "JOIN entities e ON e.id = ie.entity_id "
+        "WHERE ie.item_id = ? ORDER BY e.kind, e.name",
+        (item_id,),
+    ).fetchall()
+    grouped: dict[str, list[str]] = {}
+    for row in rows:
+        grouped.setdefault(row["kind"], []).append(row["name"])
+    return grouped
+
+
 def _item_payload(conn: sqlite3.Connection, cfg: Config, item: sqlite3.Row) -> dict:
     analysis = db.current_analysis(conn, item["id"])
-    return {
+    payload = {
         "id": item["id"],
         "seq": item["seq"],
         "photo": item["photo_sha256"],
@@ -101,9 +132,19 @@ def _item_payload(conn: sqlite3.Connection, cfg: Config, item: sqlite3.Row) -> d
         "width": item["master_width"],
         "height": item["master_height"],
         "has_master": bool(item["master_path"]),
-        "title": analysis["title"] if analysis else None,
-        "summary": analysis["summary"] if analysis else None,
+        "analysis": None,
     }
+
+    if analysis is not None:
+        payload["analysis"] = {
+            **{field: analysis[field] for field in ANALYSIS_FIELDS},
+            "provider": analysis["provider"],
+            "model": analysis["model"],
+            "created_at": analysis["created_at"],
+            "entities": _entities_for(conn, item["id"]),
+        }
+
+    return payload
 
 
 def _photo_payload(conn: sqlite3.Connection, cfg: Config, photo: sqlite3.Row) -> dict:
@@ -289,6 +330,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._rotate(conn, path.split("/")[3], body)
             if path.startswith("/api/item/") and path.endswith("/delete"):
                 return self._delete_item(conn, path.split("/")[3])
+            if path.startswith("/api/item/") and path.endswith("/fields"):
+                return self._edit_fields(conn, path.split("/")[3], body)
+            if path.startswith("/api/item/") and path.endswith("/reanalyze"):
+                return self._reanalyze(conn, path.split("/")[3])
             if path.startswith("/api/photo/") and path.endswith("/item"):
                 return self._add_item(conn, path.split("/")[3], body)
             raise FileNotFoundError(path)
@@ -378,6 +423,97 @@ class Handler(BaseHTTPRequestHandler):
             )
             conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
         self._json({"ok": True, "deleted": item_id})
+
+    def _edit_fields(self, conn: sqlite3.Connection, item_id: str, body: dict) -> None:
+        """Apply a human's corrections to the live analysis.
+
+        Writes a *new* analysis row rather than updating in place, so the
+        model's original reading survives alongside the correction and the
+        provenance stays honest about which is which.
+        """
+        fields = body.get("fields")
+        if not isinstance(fields, dict) or not fields:
+            raise ValueError("fields must be a non-empty object")
+
+        unknown = set(fields) - EDITABLE_FIELDS
+        if unknown:
+            raise ValueError(f"not editable: {', '.join(sorted(unknown))}")
+
+        current = db.current_analysis(conn, item_id)
+        if current is None:
+            raise FileNotFoundError(f"{item_id} has no analysis to edit")
+
+        merged = {field: current[field] for field in ANALYSIS_FIELDS}
+        merged.update({k: v for k, v in fields.items()})
+
+        with db.transaction(conn):
+            db.supersede_analyses(conn, item_id)
+            conn.execute(
+                """
+                INSERT INTO analyses (
+                    item_id, provider, model, created_at, superseded,
+                    item_type, title, summary, full_text,
+                    date_value, date_precision, date_source, date_note,
+                    presentation, legibility, condition_notes, alt_text,
+                    rotary_context, orientation_hint, confidence,
+                    needs_human_review, review_reason, raw_json, usage_json
+                ) VALUES (?, 'human', ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, NULL)
+                """,
+                (
+                    item_id, current["model"], db.utcnow(),
+                    merged["item_type"], merged["title"], merged["summary"],
+                    merged["full_text"], merged["date_value"],
+                    merged["date_precision"], merged["date_source"],
+                    merged["date_note"], merged["presentation"],
+                    merged["legibility"], merged["condition_notes"],
+                    merged["alt_text"], merged["rotary_context"],
+                    merged["orientation_hint"], merged["confidence"],
+                    json.dumps(merged, ensure_ascii=False),
+                ),
+            )
+            conn.execute(
+                "INSERT INTO item_overrides (item_id, fields_json, updated_at, "
+                "updated_by) VALUES (?, ?, ?, 'review-ui') "
+                "ON CONFLICT(item_id) DO UPDATE SET fields_json = excluded.fields_json, "
+                "updated_at = excluded.updated_at",
+                (item_id, json.dumps(fields, ensure_ascii=False), db.utcnow()),
+            )
+            db.log_review(
+                conn, item_id=item_id, action="edit",
+                detail=", ".join(sorted(fields)), actor="review-ui",
+            )
+
+        item = db.get_item(conn, item_id)
+        self._json({"ok": True, "item": _item_payload(conn, self.cfg, item)})
+
+    def _reanalyze(self, conn: sqlite3.Connection, item_id: str) -> None:
+        from ..analyze import analyze_items
+        from ..providers import ProviderError, build_provider
+
+        item = db.get_item(conn, item_id)
+        if item is None:
+            raise FileNotFoundError(item_id)
+
+        try:
+            provider = build_provider(self.cfg.llm)
+        except ProviderError as exc:
+            return self._error(400, str(exc))
+
+        # Scoped explicitly to this one item. Without item_ids, analyze_items
+        # would pick up every other unanalysed row in the archive and spend
+        # real money on a single button click.
+        try:
+            summary = analyze_items(
+                conn, self.cfg.paths, provider, self.cfg.llm, item_ids=[item_id],
+            )
+        except ProviderError as exc:
+            return self._error(400, str(exc))
+        if summary.failed and not summary.succeeded:
+            reason = summary.errors[0][1] if summary.errors else "analysis failed"
+            return self._error(502, reason)
+
+        refreshed = db.get_item(conn, item_id)
+        self._json({"ok": True, "item": _item_payload(conn, self.cfg, refreshed)})
 
     def _add_item(self, conn: sqlite3.Connection, sha: str, body: dict) -> None:
         """Register an item a human drew on a photo the detector missed."""

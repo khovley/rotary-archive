@@ -61,16 +61,31 @@ flag_below_confidence = 0.80
 [llm]
 provider = "anthropic"          # anthropic | openai | gemini | ollama | claude_cli
 model    = "claude-opus-5"
-fallback = []                   # e.g. ["claude_cli"] - tried on failure
-use_batch = true                # 50% cheaper, asynchronous
-max_concurrency = 4             # used when batching is unavailable
 
-# Set above 0.0 to enable two-tier analysis: a cheaper model runs first and
-# only items below this confidence are re-run on `model`.
-escalate_below_confidence = 0.0
-escalate_from_model = "claude-sonnet-5"
+# Batch runs bill at half price and are not latency-sensitive, which suits a
+# first pass over a whole collection: submit it and come back later. Turn this
+# off for small interactive runs where waiting for the queue is the slow part.
+use_batch = true
+
+# Used only when the provider has no batch endpoint.
+max_concurrency = 4
+
+# Ceiling on a single response. Generous because a dense newspaper column can
+# run long and, on models where thinking is on by default, thinking and the
+# response share this budget - too low truncates the transcription.
+max_tokens = 8000
+
+# Optional: "low" | "medium" | "high" | "xhigh" | "max". Leave unset for the
+# API default. Higher settings read faint print more carefully at more cost.
+# effort = "high"
 
 # Derivative size sent to the vision model. 1600 sits well inside the
 # high-resolution ceiling while costing roughly half the image tokens of a
 # full-size upload, with no legibility loss on a rectified crop.
 analyze_image_size = 1600
+
+# --- Provider-specific -------------------------------------------------------
+# ollama_host = "http://127.0.0.1:11434"
+# ollama_timeout = 300
+# claude_executable = "claude"
+# cli_timeout = 300

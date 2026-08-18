@@ -32,6 +32,7 @@
     <div><kbd>X</kbd><span>reject item</span></div>
     <div><kbd>R</kbd><span>rotate 90°</span></div>
     <div><kbd>C</kbd><span>open crop editor</span></div>
+    <div><kbd>E</kbd><span>edit catalogue fields</span></div>
     <div><kbd>Shift</kbd>+<kbd>A</kbd><span>approve everything visible</span></div>
     <div><kbd>P</kbd><span>approve rest of this photo</span></div>
     <div><kbd>Esc</kbd><span>close editor</span></div>
@@ -58,6 +59,24 @@
       photo, so the re-crop uses the original pixels, not this preview.
     </p>
     <div id="editor-stage" class="stage"></div>
+  </div>
+</div>
+
+<!-- Field editor: correct what the model read. -->
+<div id="fields" class="modal" hidden>
+  <div class="modal-inner">
+    <div class="modal-head">
+      <span id="fields-title">Edit</span>
+      <div class="modal-actions">
+        <button id="fields-cancel" class="ghost">Cancel</button>
+        <button id="fields-save" class="primary">Save</button>
+      </div>
+    </div>
+    <p class="muted hint">
+      Corrections are saved as a new revision. The model's original reading is
+      kept alongside, so nothing is lost and the provenance stays honest.
+    </p>
+    <form id="fields-form" class="fields-form" onsubmit="return false"></form>
   </div>
 </div>
 

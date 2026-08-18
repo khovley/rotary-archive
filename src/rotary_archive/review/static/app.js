@@ -13,8 +13,9 @@
     photos: [],
     filter: "flagged",
     flagBelow: 0.8,
-    selected: null,   // item id
-    editing: null,    // { item, photo, quad }
+    selected: null,      // item id
+    editing: null,       // crop editor: { item, photo, quad }
+    fieldEditing: null,  // field editor: { id, original }
   };
 
   const $ = (sel) => document.querySelector(sel);
@@ -121,6 +122,48 @@
       </section>`;
   }
 
+  // A date the model deduced rather than read is shown differently from one
+  // printed on the item. Collapsing the two would let a guess harden into a
+  // fact the club then believes.
+  function dateLabel(a) {
+    if (!a.date_value) return '<span class="badge">no date</span>';
+    const cls = a.date_source === "printed" ? "ok" : "warn";
+    const mark = a.date_source === "printed" ? "" : "~";
+    return `<span class="badge ${cls}" title="date ${escapeHtml(a.date_source)}">${
+      mark
+    }${escapeHtml(a.date_value)}</span>`;
+  }
+
+  function renderAnalysis(item) {
+    const a = item.analysis;
+    if (!a) {
+      return '<div class="analysis none muted">Not yet analysed</div>';
+    }
+    const ents = a.entities || {};
+    const chips = ["person", "organization", "place", "topic"]
+      .flatMap((kind) => (ents[kind] || []).map(
+        (name) => `<span class="chip ${kind}">${escapeHtml(name)}</span>`
+      ))
+      .join("");
+
+    const text = (a.full_text || "").trim();
+    return `
+      <div class="analysis">
+        <div class="a-title">${escapeHtml(a.title || "(untitled)")}</div>
+        <div class="badges">
+          ${dateLabel(a)}
+          <span class="badge">${escapeHtml(a.item_type || "")}</span>
+          <span class="badge">${escapeHtml(a.presentation || "")}</span>
+          <span class="badge" title="legibility">leg ${a.legibility ?? "?"}</span>
+        </div>
+        ${a.summary ? `<p class="a-summary">${escapeHtml(a.summary)}</p>` : ""}
+        ${chips ? `<div class="chips">${chips}</div>` : ""}
+        ${text ? `<details class="a-text"><summary>Transcription (${
+          text.length} chars)</summary><pre>${escapeHtml(text)}</pre></details>` : ""}
+        <div class="muted a-provenance">${escapeHtml(a.provider)} · ${escapeHtml(a.model)}</div>
+      </div>`;
+  }
+
   function renderCard(item) {
     const conf = (item.confidence ?? 0).toFixed(2);
     const confClass = item.confidence >= state.flagBelow ? "ok" : "warn";
@@ -135,23 +178,29 @@
         item.flagged ? "flagged" : ""
       } ${item.status}" data-item="${item.id}" tabindex="0">
         <img class="thumb" src="/media/item/${item.id}" loading="lazy"
-             alt="Cropped item ${item.id}"
+             alt="${escapeHtml((item.analysis && item.analysis.alt_text) || "Cropped item " + item.id)}"
              onerror="this.style.opacity=.25">
         <div class="card-meta">
           <span class="card-id">${item.id}</span>
           <div class="badges">
-            <span class="badge ${confClass}">conf ${conf}</span>
+            <span class="badge ${confClass}">crop ${conf}</span>
             <span class="badge">${escapeHtml(item.method || "?")}</span>
             ${item.rotation ? `<span class="badge">${item.rotation}°</span>` : ""}
             ${statusBadge}
           </div>
-          ${item.reason ? `<span class="muted">${escapeHtml(item.reason)}</span>` : ""}
+          ${renderAnalysis(item)}
+          ${item.reason ? `<span class="muted reason">${escapeHtml(item.reason)}</span>` : ""}
         </div>
         <div class="card-actions">
           <button data-act="approve" data-item="${item.id}">Approve</button>
           <button data-act="reject" data-item="${item.id}" class="ghost">Reject</button>
           <button data-act="crop" data-item="${item.id}" class="ghost">Crop</button>
           <button data-act="rotate" data-item="${item.id}" class="ghost">⟳</button>
+          ${item.analysis
+            ? `<button data-act="edit" data-item="${item.id}" class="ghost">Edit</button>`
+            : ""}
+          <button data-act="reanalyze" data-item="${item.id}" class="ghost"
+                  title="Send this item to the model again">Re-read</button>
         </div>
       </article>`;
   }
@@ -244,6 +293,8 @@
           else if (act === "reject") await decide([item], "rejected");
           else if (act === "rotate") await rotate(item);
           else if (act === "crop") openEditor(item);
+          else if (act === "edit") openFieldEditor(item);
+          else if (act === "reanalyze") await reanalyze(item, btn);
           else if (act === "approve-photo") {
             const group = state.photos.find((p) => p.sha256 === photo);
             await decide(group.items.filter(matchesFilter).map((i) => i.id), "approved");
@@ -257,6 +308,107 @@
     app.querySelectorAll(".card").forEach((card) => {
       card.addEventListener("click", () => selectItem(card.dataset.item));
     });
+  }
+
+  async function reanalyze(id, button) {
+    if (button) { button.disabled = true; button.textContent = "reading…"; }
+    try {
+      const updated = await api(`/api/item/${id}/reanalyze`, { method: "POST" });
+      replaceItem(updated.item);
+      toast("Re-read by the model");
+      render();
+    } finally {
+      if (button) { button.disabled = false; button.textContent = "Re-read"; }
+    }
+  }
+
+  // -------------------------------------------------------- field editor --
+
+  // Mirrors EDITABLE_FIELDS on the server. Anything else is the model's
+  // reading and is displayed but not editable here.
+  const FIELD_SPECS = [
+    { key: "title", label: "Title", type: "text" },
+    { key: "item_type", label: "Type", type: "select", options: [
+      "newspaper_clipping", "photograph", "document", "letter", "certificate",
+      "program", "newsletter", "ephemera", "object", "other"] },
+    { key: "date_value", label: "Date", type: "text",
+      hint: "ISO 8601: 1962-07-14, 1962-07, or 1962. Leave empty if unknown." },
+    { key: "date_precision", label: "Date precision", type: "select",
+      options: ["day", "month", "year", "decade", "unknown"] },
+    { key: "date_source", label: "Date source", type: "select",
+      options: ["printed", "inferred", "unknown"],
+      hint: "Use 'printed' only if the date is actually written on the item." },
+    { key: "presentation", label: "Presentation", type: "select",
+      options: ["image", "text", "both"] },
+    { key: "summary", label: "Summary", type: "textarea" },
+    { key: "full_text", label: "Transcription", type: "textarea", big: true },
+    { key: "rotary_context", label: "Rotary context", type: "textarea" },
+    { key: "condition_notes", label: "Condition", type: "text" },
+    { key: "alt_text", label: "Alt text", type: "text" },
+  ];
+
+  function openFieldEditor(id) {
+    const found = findItem(id);
+    if (!found || !found.item.analysis) return;
+    state.fieldEditing = { id, original: { ...found.item.analysis } };
+
+    const a = found.item.analysis;
+    const rows = FIELD_SPECS.map((spec) => {
+      const value = a[spec.key] ?? "";
+      let control;
+      if (spec.type === "select") {
+        control = `<select data-field="${spec.key}">${spec.options
+          .map((o) => `<option value="${o}"${o === value ? " selected" : ""}>${o}</option>`)
+          .join("")}</select>`;
+      } else if (spec.type === "textarea") {
+        control = `<textarea data-field="${spec.key}" rows="${
+          spec.big ? 14 : 3}">${escapeHtml(value)}</textarea>`;
+      } else {
+        control = `<input type="text" data-field="${spec.key}" value="${escapeHtml(value)}">`;
+      }
+      return `<label class="field${spec.big ? " wide" : ""}">
+        <span>${spec.label}</span>${control}
+        ${spec.hint ? `<small class="muted">${spec.hint}</small>` : ""}
+      </label>`;
+    }).join("");
+
+    $("#fields-title").textContent = `Edit — ${id}`;
+    $("#fields-form").innerHTML = rows;
+    $("#fields").hidden = false;
+  }
+
+  function closeFieldEditor() {
+    state.fieldEditing = null;
+    $("#fields").hidden = true;
+    $("#fields-form").innerHTML = "";
+  }
+
+  async function saveFields() {
+    if (!state.fieldEditing) return;
+    const { id, original } = state.fieldEditing;
+
+    // Send only what actually changed, so the stored override is a record of
+    // the human's corrections rather than a copy of the whole analysis.
+    const changed = {};
+    $("#fields-form").querySelectorAll("[data-field]").forEach((el) => {
+      const key = el.dataset.field;
+      const value = el.value;
+      if (value !== (original[key] ?? "")) changed[key] = value;
+    });
+
+    if (!Object.keys(changed).length) { closeFieldEditor(); return; }
+
+    try {
+      const updated = await api(`/api/item/${id}/fields`, {
+        method: "POST", body: JSON.stringify({ fields: changed }),
+      });
+      replaceItem(updated.item);
+      toast(`Saved ${Object.keys(changed).length} field(s)`);
+      closeFieldEditor();
+      render();
+    } catch (err) {
+      toast(err.message, 4000);
+    }
   }
 
   // --------------------------------------------------------- crop editor --
@@ -380,8 +532,11 @@
   document.addEventListener("keydown", async (ev) => {
     if (ev.target.matches("input, textarea")) return;
 
-    if (ev.key === "Escape" && state.editing) { closeEditor(); return; }
-    if (state.editing) return;
+    if (ev.key === "Escape") {
+      if (state.fieldEditing) { closeFieldEditor(); return; }
+      if (state.editing) { closeEditor(); return; }
+    }
+    if (state.editing || state.fieldEditing) return;
 
     const key = ev.key.toLowerCase();
     try {
@@ -404,6 +559,8 @@
         ev.preventDefault(); await rotate(state.selected);
       } else if (key === "c" && state.selected) {
         ev.preventDefault(); openEditor(state.selected);
+      } else if (key === "e" && state.selected) {
+        ev.preventDefault(); openFieldEditor(state.selected);
       } else if (key === "p" && state.selected) {
         ev.preventDefault();
         const found = findItem(state.selected);
@@ -453,6 +610,8 @@
   });
   $("#editor-cancel").addEventListener("click", closeEditor);
   $("#editor-save").addEventListener("click", saveEditor);
+  $("#fields-cancel").addEventListener("click", closeFieldEditor);
+  $("#fields-save").addEventListener("click", saveFields);
   $("#editor-reset").addEventListener("click", () => {
     if (!state.editing || !state.editing.item) return;
     state.editing.quad = state.editing.item.quad_detected.map(([x, y]) => [x, y]);
