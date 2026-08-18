@@ -533,10 +533,11 @@
     if (ev.target.matches("input, textarea")) return;
 
     if (ev.key === "Escape") {
+      if (!$("#intake").hidden) { closeIntake(); return; }
       if (state.fieldEditing) { closeFieldEditor(); return; }
       if (state.editing) { closeEditor(); return; }
     }
-    if (state.editing || state.fieldEditing) return;
+    if (state.editing || state.fieldEditing || !$("#intake").hidden) return;
 
     const key = ev.key.toLowerCase();
     try {
@@ -586,6 +587,149 @@
     return following ? following.id : null;
   }
 
+  // ----------------------------------------------------------- add photos --
+
+  /* Two ways in, because the two situations are genuinely different. A whole
+     box of material is hundreds of multi-megabyte HEICs: Finder copies those
+     far faster than a browser can, and survives being interrupted. A handful
+     someone brings to a meeting is easier to just drop on the page. */
+
+  let inboxPoll;
+
+  async function refreshInbox() {
+    try {
+      const state = await api("/api/inbox");
+      $("#inbox-path").textContent = state.path;
+
+      const n = state.waiting;
+      const pill = $("#waiting-pill");
+      pill.hidden = n === 0;
+      pill.textContent = state.exact ? n : `${n}+`;
+
+      const line = $("#waiting-line");
+      const run = $("#run-pipeline");
+      if (n === 0) {
+        line.textContent = state.present
+          ? `Nothing new. All ${state.present} file(s) in the inbox are already in the archive.`
+          : "The inbox is empty.";
+        run.disabled = true;
+        run.textContent = "Process photos";
+      } else {
+        const count = state.exact ? `${n}` : `${n}+`;
+        line.innerHTML = `<strong>${count} new photo${n === 1 ? "" : "s"}</strong> waiting.`;
+        run.disabled = false;
+        run.textContent = `Process ${count} photo${n === 1 ? "" : "s"}`;
+      }
+      return state;
+    } catch (err) {
+      $("#waiting-line").textContent = `Could not read the inbox: ${err.message}`;
+      return null;
+    }
+  }
+
+  function openIntake() {
+    $("#intake").hidden = false;
+    refreshInbox();
+  }
+
+  function closeIntake() {
+    $("#intake").hidden = true;
+    clearInterval(inboxPoll);
+  }
+
+  async function uploadFiles(files) {
+    const list = [...files];
+    if (!list.length) return;
+
+    const status = $("#upload-status");
+    status.hidden = false;
+
+    let done = 0;
+    const failures = [];
+    for (const file of list) {
+      status.textContent = `Uploading ${done + 1} of ${list.length}: ${file.name}`;
+      try {
+        // One request per file: the server writes it straight to disk, so a
+        // 50MB HEIC never sits in memory twice, and progress is per-file.
+        await api(`/api/inbox/upload?name=${encodeURIComponent(file.name)}`, {
+          method: "POST",
+          headers: {},           // let the browser set Content-Type
+          body: file,
+        });
+        done++;
+      } catch (err) {
+        failures.push(`${file.name}: ${err.message}`);
+      }
+    }
+
+    status.textContent = failures.length
+      ? `Uploaded ${done} of ${list.length}. ${failures[0]}`
+      : `Uploaded ${done} file${done === 1 ? "" : "s"}.`;
+    if (failures.length) toast(failures[0], 5000);
+
+    await refreshInbox();
+  }
+
+  async function runPipeline() {
+    const run = $("#run-pipeline");
+    run.disabled = true;
+    $("#run-progress").hidden = false;
+
+    try {
+      await api("/api/process", { method: "POST" });
+    } catch (err) {
+      toast(err.message, 5000);
+      run.disabled = false;
+      return;
+    }
+
+    // The run is a background thread on the server, so closing this tab does
+    // not abandon it - we are only watching.
+    const STAGES = { starting: 5, ingest: 25, segment: 65, rectify: 90, done: 100 };
+    clearInterval(inboxPoll);
+    inboxPoll = setInterval(async () => {
+      let job;
+      try {
+        job = await api("/api/process");
+      } catch (err) {
+        return;
+      }
+
+      $("#run-bar-fill").style.width = `${STAGES[job.stage] ?? 5}%`;
+      $("#run-message").textContent = job.message || job.stage;
+
+      const c = job.counts || {};
+      const parts = [];
+      if (c.ingested != null) parts.push(`${c.ingested} photo(s) added`);
+      if (c.duplicates) parts.push(`${c.duplicates} already had`);
+      if (c.items != null) parts.push(`${c.items} item(s) found`);
+      if (c.flagged != null) parts.push(`${c.flagged} flagged`);
+      if (job.elapsed != null) parts.push(`${job.elapsed}s`);
+      $("#run-counts").textContent = parts.join(" · ");
+
+      if (job.state === "running") return;
+
+      clearInterval(inboxPoll);
+      $("#run-pipeline").disabled = false;
+
+      if (job.state === "error") {
+        toast(job.error || "The run stopped early.", 6000);
+      } else {
+        if (job.error) toast(job.error, 6000);
+        toast(`Added ${c.ingested || 0} photo(s), found ${c.items || 0} item(s)`);
+        await reload();
+        await refreshInbox();
+      }
+    }, 700);
+  }
+
+  async function reload() {
+    const data = await api("/api/photos");
+    state.photos = data.photos;
+    state.flagBelow = data.flag_below ?? 0.8;
+    render();
+  }
+
   // ---------------------------------------------------------------- boot --
 
   document.querySelectorAll(".segmented button").forEach((btn) => {
@@ -608,6 +752,53 @@
   $("#help-toggle").addEventListener("click", () => {
     $("#help").hidden = !$("#help").hidden;
   });
+
+  $("#add-photos").addEventListener("click", openIntake);
+  $("#intake-close").addEventListener("click", closeIntake);
+  $("#run-pipeline").addEventListener("click", runPipeline);
+
+  $("#open-inbox").addEventListener("click", async () => {
+    try {
+      const res = await api("/api/inbox/open", { method: "POST" });
+      if (!res.ok) toast(`Open it yourself: ${res.path}`, 6000);
+    } catch (err) {
+      toast(err.message, 5000);
+    }
+  });
+
+  const dropzone = $("#dropzone");
+  const fileInput = $("#file-input");
+  dropzone.addEventListener("click", () => fileInput.click());
+  dropzone.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); fileInput.click(); }
+  });
+  fileInput.addEventListener("change", () => {
+    uploadFiles(fileInput.files);
+    fileInput.value = "";
+  });
+  ["dragenter", "dragover"].forEach((type) =>
+    dropzone.addEventListener(type, (ev) => {
+      ev.preventDefault();
+      dropzone.classList.add("over");
+    })
+  );
+  ["dragleave", "drop"].forEach((type) =>
+    dropzone.addEventListener(type, (ev) => {
+      ev.preventDefault();
+      dropzone.classList.remove("over");
+    })
+  );
+  dropzone.addEventListener("drop", (ev) => {
+    if (ev.dataTransfer?.files?.length) uploadFiles(ev.dataTransfer.files);
+  });
+
+  // The page itself must swallow drops too, or the browser navigates away from
+  // the app and shows the dropped image on its own.
+  ["dragover", "drop"].forEach((type) =>
+    window.addEventListener(type, (ev) => {
+      if (!ev.target.closest?.("#dropzone")) ev.preventDefault();
+    })
+  );
   $("#editor-cancel").addEventListener("click", closeEditor);
   $("#editor-save").addEventListener("click", saveEditor);
   $("#fields-cancel").addEventListener("click", closeFieldEditor);
@@ -624,6 +815,9 @@
       state.photos = data.photos;
       state.flagBelow = data.flag_below ?? 0.8;
       render();
+      // Surface waiting photos in the toolbar so the inbox is discoverable
+      // without having to know the panel exists.
+      refreshInbox();
     } catch (err) {
       app.innerHTML = `<div class="empty">Could not load the archive: ${escapeHtml(err.message)}</div>`;
     }

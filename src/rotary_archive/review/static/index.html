@@ -20,6 +20,7 @@
       <button data-filter="pending">Pending</button>
       <button data-filter="all">All</button>
     </div>
+    <button id="add-photos">Add photos<span id="waiting-pill" class="pill" hidden></span></button>
     <button id="approve-visible" class="primary">Approve all visible</button>
     <button id="help-toggle" class="ghost" title="Keyboard shortcuts">?</button>
   </div>
@@ -42,6 +43,55 @@
 <main id="app" class="stack" aria-live="polite"></main>
 
 <div id="toast" class="toast" hidden></div>
+
+<!-- Add photos: a folder for bulk, a drop zone for the odd few. -->
+<div id="intake" class="modal" hidden>
+  <div class="modal-inner">
+    <div class="modal-head">
+      <span>Add photos</span>
+      <div class="modal-actions">
+        <button id="intake-close" class="ghost">Close</button>
+      </div>
+    </div>
+
+    <div class="intake-body">
+      <section class="intake-step">
+        <h3>1. Put the photos in the inbox</h3>
+        <p class="muted">
+          For a whole batch, copy them in with Finder &mdash; it handles
+          hundreds of large files far better than a browser can.
+        </p>
+        <div class="path-row">
+          <code id="inbox-path">…</code>
+          <button id="open-inbox">Open folder</button>
+        </div>
+
+        <div id="dropzone" class="dropzone" tabindex="0">
+          <strong>…or drop a few photos here</strong>
+          <span class="muted">HEIC, JPEG, PNG, TIFF, WebP</span>
+          <input id="file-input" type="file" multiple accept="image/*,.heic,.heif" hidden>
+        </div>
+        <div id="upload-status" class="upload-status muted" hidden></div>
+      </section>
+
+      <section class="intake-step">
+        <h3>2. Process them</h3>
+        <p class="muted">
+          Finds each item in every photo, crops it, and straightens it. Nothing
+          is sent anywhere and nothing costs money &mdash; reading the items
+          with a model is a separate step.
+        </p>
+        <p id="waiting-line" class="waiting-line">Checking the inbox…</p>
+        <button id="run-pipeline" class="primary" disabled>Process photos</button>
+        <div id="run-progress" class="run-progress" hidden>
+          <div class="run-bar"><span id="run-bar-fill"></span></div>
+          <p id="run-message" class="muted"></p>
+          <p id="run-counts" class="run-counts muted"></p>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
 
 <!-- Crop editor: drag the four corners on the source photo. -->
 <div id="editor" class="modal" hidden>

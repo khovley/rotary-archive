@@ -16,13 +16,22 @@ Routes:
     POST /api/item/<id>/rotate    apply a quarter turn and re-rectify
     POST /api/photo/<sha>/item    add an item a human drew by hand
     POST /api/item/<id>/delete    remove a spurious detection
+    GET  /api/inbox               how many new photos are waiting, and where
+    POST /api/inbox/open          reveal the inbox folder in the file manager
+    POST /api/inbox/upload        write one uploaded photo into the inbox
+    GET  /api/process             progress of the running pipeline job
+    POST /api/process             start ingest -> segment -> rectify
 """
 
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
+import subprocess
+import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
@@ -41,6 +50,188 @@ PREVIEW_LONG_EDGE = 1400
 
 _preview_cache: dict[str, bytes] = {}
 _cache_lock = threading.Lock()
+
+# Photo suffixes the inbox accepts on upload. Deliberately the same set ingest
+# understands, so a file that lands here is one the pipeline can actually read.
+UPLOAD_SUFFIXES = {".heic", ".heif", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"}
+MAX_UPLOAD_BYTES = 200 * 1024 * 1024   # a 200MB single photo is already absurd
+
+
+class PipelineJob:
+    """Runs ingest -> segment -> rectify on a background thread.
+
+    One job at a time, by design. The stages write to the same SQLite database
+    and the same image directories; two concurrent runs would race over both.
+    The UI polls `snapshot()` rather than holding a connection open, so a
+    closed browser tab cannot abandon a half-finished run.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+        self.reset()
+
+    def reset(self) -> None:
+        self.state = "idle"        # idle | running | done | error
+        self.stage = ""
+        self.message = ""
+        self.error: str | None = None
+        self.counts: dict[str, int] = {}
+        self.started_at: float | None = None
+        self.finished_at: float | None = None
+
+    @property
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            elapsed = None
+            if self.started_at:
+                end = self.finished_at or time.monotonic()
+                elapsed = round(end - self.started_at, 1)
+            return {
+                "state": self.state,
+                "stage": self.stage,
+                "message": self.message,
+                "error": self.error,
+                "counts": dict(self.counts),
+                "elapsed": elapsed,
+            }
+
+    def _set(self, **fields: Any) -> None:
+        with self._lock:
+            for key, value in fields.items():
+                setattr(self, key, value)
+
+    def start(self, cfg: Config) -> bool:
+        if self.running:
+            return False
+        with self._lock:
+            self.reset()
+            self.state = "running"
+            self.stage = "starting"
+            self.started_at = time.monotonic()
+        self._thread = threading.Thread(
+            target=self._run, args=(cfg,), daemon=True
+        )
+        self._thread.start()
+        return True
+
+    def _run(self, cfg: Config) -> None:
+        from ..ingest import ingest_inbox
+        from ..rectify import rectify_pending
+        from ..segment import segment_pending
+
+        conn = db.connect(cfg.paths.database)
+        try:
+            self._set(stage="ingest", message="Reading photos from the inbox...")
+            ingested = ingest_inbox(
+                conn, cfg.paths,
+                progress=lambda p: self._set(message=f"Reading {p.name}"),
+            )
+            self._set(counts={**self.counts,
+                              "ingested": len(ingested.ingested),
+                              "duplicates": len(ingested.skipped_duplicate),
+                              "unreadable": len(ingested.unreadable)})
+
+            self._set(stage="segment", message="Finding items in each photo...")
+            flag_below = float(cfg.review.get("flag_below_confidence", 0.80))
+            results = segment_pending(
+                conn, cfg.paths, cfg.segment, flag_below=flag_below,
+                progress=lambda p: self._set(
+                    message=f"Finding items in {p['original_name']}"
+                ),
+            )
+            found = sum(len(r.candidates) for r in results)
+            self._set(counts={**self.counts, "items": found})
+
+            self._set(stage="rectify", message="Cropping and straightening...")
+            rectified = rectify_pending(
+                conn, cfg.paths, cfg.rectify,
+                progress=lambda i: self._set(message=f"Cropping {i['id']}"),
+            )
+            self._set(counts={**self.counts, "rectified": len(rectified)})
+
+            stats = db.counts(conn)
+            self._set(
+                state="done", stage="done", message="Finished.",
+                finished_at=time.monotonic(),
+                counts={**self.counts, "flagged": stats["flagged"]},
+            )
+
+            problems = [f"{p.name}: {why}" for p, why in ingested.unreadable]
+            if problems:
+                self._set(message="Finished, with files that could not be read.",
+                          error="; ".join(problems[:5]))
+        except Exception as exc:
+            self._set(
+                state="error", stage="error", error=f"{type(exc).__name__}: {exc}",
+                message="The run stopped early.", finished_at=time.monotonic(),
+            )
+        finally:
+            conn.close()
+
+
+_job = PipelineJob()
+
+
+def inbox_state(cfg: Config) -> dict[str, Any]:
+    """What is sitting in the inbox, and how much of it is new.
+
+    "Waiting" counts only photos not already in the archive. Without --move,
+    ingested files stay in the inbox, and reporting those as waiting would nag
+    forever. Hashing is the only honest way to tell, so this is capped: past a
+    few hundred files the count stops being worth the disk read and the UI
+    just says "many".
+    """
+    from ..ingest import find_photos, sha256_file
+
+    present = find_photos(cfg.paths.inbox)
+    result: dict[str, Any] = {
+        "path": str(cfg.paths.inbox),
+        "present": len(present),
+        "waiting": 0,
+        "exact": True,
+    }
+    if not present:
+        return result
+
+    if len(present) > 400:
+        result["waiting"] = len(present)
+        result["exact"] = False
+        return result
+
+    conn = db.connect(cfg.paths.database, create=False)
+    try:
+        result["waiting"] = sum(
+            1 for path in present if not db.photo_exists(conn, sha256_file(path))
+        )
+    finally:
+        conn.close()
+    return result
+
+
+def safe_upload_name(raw: str) -> str:
+    """A filename that cannot escape the inbox.
+
+    Uploads arrive over localhost from our own page, but the name is still
+    attacker-shaped input: it comes from the filesystem of whatever was
+    dragged in. Taking only the basename kills traversal, and the suffix
+    allowlist keeps the inbox to files ingest can actually read.
+    """
+    # Backslashes are not separators on POSIX, so a name carrying a Windows
+    # path would survive Path().name intact. Normalising them first means a
+    # file dragged from a Windows share is treated the same everywhere.
+    name = Path(raw.replace("\\", "/")).name.strip()
+    if not name or name in (".", "..") or name.startswith("."):
+        raise ValueError(f"unusable filename: {raw!r}")
+    if Path(name).suffix.lower() not in UPLOAD_SUFFIXES:
+        raise ValueError(
+            f"{name}: not a photo this archive reads "
+            f"({', '.join(sorted(UPLOAD_SUFFIXES))})"
+        )
+    return name
 
 
 def _static_file(name: str) -> bytes | None:
@@ -234,6 +425,12 @@ class Handler(BaseHTTPRequestHandler):
             }.get(Path(name).suffix, "application/octet-stream")
             return self._send(200, body, kind)
 
+        if path == "/api/inbox":
+            return self._json(inbox_state(self.cfg))
+
+        if path == "/api/process":
+            return self._json(_job.snapshot())
+
         if path == "/api/photos":
             conn = self._conn()
             try:
@@ -319,6 +516,15 @@ class Handler(BaseHTTPRequestHandler):
             self._error(500, f"{type(exc).__name__}: {exc}")
 
     def _route_post(self, path: str) -> None:
+        # These three touch the filesystem or a background job rather than the
+        # database, so they are handled before a connection is opened.
+        if path == "/api/inbox/upload":
+            return self._upload()
+        if path == "/api/inbox/open":
+            return self._open_inbox()
+        if path == "/api/process":
+            return self._start_process()
+
         body = self._body()
         conn = self._conn()
         try:
@@ -341,6 +547,85 @@ class Handler(BaseHTTPRequestHandler):
             conn.close()
 
     # ------------------------------------------------------------- actions --
+
+    # ------------------------------------------------------------- inbox --
+
+    def _upload(self) -> None:
+        """Write one uploaded photo into the inbox.
+
+        One file per request with the name in the query string, rather than a
+        multipart form. That avoids hand-rolling a multipart parser, keeps
+        memory to a single photo, and gives the page per-file progress for
+        free when it uploads a batch.
+        """
+        from urllib.parse import parse_qs
+
+        query = parse_qs(urlparse(self.path).query)
+        raw_name = (query.get("name") or [""])[0]
+        try:
+            name = safe_upload_name(raw_name)
+        except ValueError as exc:
+            raise ValueError(str(exc))
+
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0:
+            raise ValueError(f"{name}: empty upload")
+        if length > MAX_UPLOAD_BYTES:
+            raise ValueError(
+                f"{name}: {length // (1024*1024)}MB exceeds the "
+                f"{MAX_UPLOAD_BYTES // (1024*1024)}MB limit"
+            )
+
+        self.cfg.paths.inbox.mkdir(parents=True, exist_ok=True)
+        target = self.cfg.paths.inbox / name
+
+        # Never overwrite: two photos can legitimately share a camera filename,
+        # and losing one silently would be worse than an odd name.
+        if target.exists():
+            stem, suffix = target.stem, target.suffix
+            n = 2
+            while target.exists():
+                target = self.cfg.paths.inbox / f"{stem}-{n}{suffix}"
+                n += 1
+
+        # Streamed in chunks so a 50MB HEIC never sits in memory twice.
+        remaining = length
+        with target.open("wb") as fh:
+            while remaining > 0:
+                chunk = self.rfile.read(min(1 << 20, remaining))
+                if not chunk:
+                    break
+                fh.write(chunk)
+                remaining -= len(chunk)
+
+        if remaining > 0:
+            target.unlink(missing_ok=True)
+            raise ValueError(f"{name}: upload ended early")
+
+        self._json({"ok": True, "name": target.name, "bytes": length})
+
+    def _open_inbox(self) -> None:
+        """Reveal the inbox in the desktop file manager."""
+        self.cfg.paths.inbox.mkdir(parents=True, exist_ok=True)
+        opener = (
+            ["open", str(self.cfg.paths.inbox)] if sys.platform == "darwin"
+            else ["explorer", str(self.cfg.paths.inbox)] if sys.platform == "win32"
+            else ["xdg-open", str(self.cfg.paths.inbox)]
+        )
+        if shutil.which(opener[0]) is None and sys.platform != "win32":
+            # No file manager to call; the path is shown in the UI regardless.
+            return self._json({"ok": False, "path": str(self.cfg.paths.inbox)})
+        subprocess.Popen(
+            opener, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        self._json({"ok": True, "path": str(self.cfg.paths.inbox)})
+
+    def _start_process(self) -> None:
+        if not _job.start(self.cfg):
+            return self._error(409, "A run is already in progress.")
+        self._json({"ok": True, **_job.snapshot()})
+
+    # ------------------------------------------------------------ actions --
 
     def _decide(self, conn: sqlite3.Connection, body: dict) -> None:
         ids = body.get("ids") or []
