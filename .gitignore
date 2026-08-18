@@ -13,8 +13,11 @@ inbox/*
 masters/
 derivatives/
 exports/
-site/
 !inbox/.gitkeep
+
+# site/ IS tracked: it is published via GitHub Pages so the rendered archive
+# can be linked and designed against. It contains only generated output from
+# synthetic test data - no real club material.
 
 # Never commit credentials.
 .env
