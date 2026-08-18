@@ -424,6 +424,20 @@
 
   // ------------------------------------------------------- embed support --
 
+  /* Marks how the archive is being viewed so CSS can differ where it must.
+     The only current use is the header: standalone it sticks, which helps on
+     the long timeline page; embedded it must not, because the iframe is
+     auto-resized to full content height and never scrolls, so a sticky bar
+     would sit at the top of a very tall document and never actually stick. */
+  try {
+    document.documentElement.classList.add(
+      window.parent === window ? "standalone" : "embedded"
+    );
+  } catch (err) {
+    // A cross-origin parent can throw on access; treat that as embedded.
+    document.documentElement.classList.add("embedded");
+  }
+
   /* Tells a WordPress host page how tall to make the iframe. Without this the
      embed either scrolls inside a fixed box or gets cut off. */
   function notifyHeight() {

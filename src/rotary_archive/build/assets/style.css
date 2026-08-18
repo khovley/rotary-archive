@@ -114,10 +114,15 @@ a:hover { color: var(--accent-hover); text-decoration-thickness: 2px; }
 
 /* ------------------------------------------------------------------ head - */
 
-/* Not sticky: in the WordPress embed the iframe is auto-resized to its full
-   content height, so the frame itself never scrolls - the parent page does.
-   A sticky bar in here would simply sit at the top of a very tall document
-   and never stick, and position: fixed would pin it to the wrong viewport. */
+/* Sticky only when the archive is viewed on its own.
+   Embedded, the iframe is auto-resized to its full content height so the frame
+   never scrolls - the parent page does - and a sticky bar would sit at the top
+   of a very tall document and never actually stick. Standalone (the Pages URL,
+   or opened straight from disk) the page does scroll, and keeping search and
+   nav reachable matters on the long timeline. position: fixed is wrong in both
+   cases: it would pin to the wrong viewport inside a frame. */
+.standalone .site-head { position: sticky; top: 0; z-index: 30; }
+
 .site-head {
   display: flex; flex-wrap: wrap; gap: .6rem 1.5rem; align-items: center;
   padding: .85rem clamp(1rem, 4vw, 2.5rem);
