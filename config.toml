@@ -58,6 +58,18 @@ port = 8765
 # about the item's edge fall to 0.75 or below. 0.80 separates those cleanly.
 flag_below_confidence = 0.80
 
+[site]
+club_name = "Rotary Club"
+tagline   = "A history in clippings, photographs, and paper"
+# Shown on the "help us identify" prompt for unidentified photographs.
+contact   = ""
+
+# Long-edge size used for the main image on an item page. Must be one of the
+# derivative sizes above.
+detail_image_size = 1600
+thumb_image_size  = 320
+card_image_size   = 800
+
 [llm]
 provider = "anthropic"          # anthropic | openai | gemini | ollama | claude_cli
 model    = "claude-opus-5"

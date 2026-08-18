@@ -371,6 +371,113 @@ def review(
     _do_review(cfg, port, open_browser=not no_browser)
 
 
+# ------------------------------------------------------------------ build ---
+
+
+def _do_build(
+    cfg: Config, conn: sqlite3.Connection, *, approved_only: bool, serve_after: bool
+) -> int:
+    from .build import build_site
+
+    summary = build_site(
+        conn, cfg.paths, cfg.site, approved_only=approved_only, clean=True
+    )
+
+    if summary.items == 0:
+        console.print(
+            "[yellow]Nothing to publish.[/yellow] Items need an analysis "
+            "before they can appear on the site - run [bold]rotary analyze[/bold]."
+            + (
+                "\n[dim]--approved-only was set; approve items in "
+                "`rotary review` first.[/dim]"
+                if approved_only
+                else ""
+            )
+        )
+        return 0
+
+    console.print(
+        f"[green]Built {summary.items} item(s)[/green] into {summary.output}"
+    )
+    console.print(
+        f"[dim]{summary.entities} entities · {summary.media_files} images "
+        f"({summary.media_mb} MB) · decades: "
+        f"{', '.join(summary.decades) or 'none'}[/dim]"
+    )
+    if summary.unapproved and not approved_only:
+        console.print(
+            f"[yellow]{summary.unapproved} of these have not been approved in "
+            "review yet.[/yellow] Use --approved-only for the real publish."
+        )
+
+    console.print(
+        f"\nOpen [bold]{summary.output / 'index.html'}[/bold] to check it - it "
+        "works straight from disk."
+    )
+    console.print(
+        f"[dim]WordPress embed snippet: {summary.output / 'embed.html'}[/dim]"
+    )
+
+    if serve_after:
+        _serve_site(cfg)
+    return summary.items
+
+
+def _serve_site(cfg: Config, port: int = 8770) -> None:
+    """Serve the built site locally.
+
+    Opening index.html from disk works, but serving it is closer to how the
+    club's host will behave, so it is the better final check.
+    """
+    import functools
+    import http.server
+    import socketserver
+    import webbrowser
+
+    handler = functools.partial(
+        http.server.SimpleHTTPRequestHandler, directory=str(cfg.paths.site)
+    )
+    with socketserver.TCPServer(("127.0.0.1", port), handler) as httpd:
+        url = f"http://127.0.0.1:{port}/"
+        console.print(f"\nServing the site at [bold cyan]{url}[/bold cyan]  (Ctrl-C to stop)")
+        webbrowser.open(url)
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            console.print("\nStopped.")
+
+
+@app.command()
+def build(
+    approved_only: bool = typer.Option(
+        False,
+        "--approved-only",
+        help="Publish only items approved in review. Use this for the real publish.",
+    ),
+    serve: bool = typer.Option(
+        False, "--serve", help="Serve the built site locally and open it."
+    ),
+) -> None:
+    """Generate the static archive site from the database."""
+    cfg, conn = _load()
+    _do_build(cfg, conn, approved_only=approved_only, serve_after=serve)
+
+
+@app.command()
+def serve(
+    port: int = typer.Option(8770, help="Port to serve the built site on."),
+) -> None:
+    """Serve the already-built site locally."""
+    cfg, conn = _load()
+    conn.close()
+    if not (cfg.paths.site / "index.html").exists():
+        console.print(
+            "[red]No site built yet.[/red] Run [bold]rotary build[/bold] first."
+        )
+        raise typer.Exit(code=2)
+    _serve_site(cfg, port)
+
+
 # -------------------------------------------------------------------- run ---
 
 

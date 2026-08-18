@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{CLUB}} — Archive</title>
+<meta name="description" content="{{TAGLINE}}">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-head">
+  <a class="brand" href="#/">
+    <span class="brand-name">{{CLUB}}</span>
+    <span class="brand-sub">Archive</span>
+  </a>
+
+  <nav class="nav" aria-label="Sections">
+    <a href="#/timeline">Timeline</a>
+    <a href="#/gallery">Gallery</a>
+    <a href="#/people">People</a>
+    <a href="#/topics">Topics</a>
+  </nav>
+
+  <div class="search-wrap">
+    <label class="sr-only" for="q">Search the archive</label>
+    <input id="q" type="search" placeholder="Search names, places, text…"
+           autocomplete="off" spellcheck="false">
+  </div>
+</header>
+
+<main id="main" tabindex="-1"></main>
+
+<footer class="site-foot">
+  <p class="muted">
+    <span id="foot-counts"></span>
+    <span id="foot-generated"></span>
+  </p>
+  <p class="muted small">
+    Dates marked <span class="approx-key">about</span> were deduced from the
+    item rather than printed on it.
+  </p>
+</footer>
+
+<!-- Data is a JS assignment rather than a fetched JSON file so the archive
+     also works opened straight from disk, where fetch() is blocked. -->
+<script src="data/archive.js"></script>
+<script src="assets/app.js"></script>
+</body>
+</html>

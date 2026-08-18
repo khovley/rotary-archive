@@ -1,0 +1,66 @@
+<!--
+  {{CLUB}} Archive - WordPress / Elementor embed
+  =============================================
+
+  1. Upload the whole `site/` folder to the club's web host, e.g. so that
+     https://yourclub.org/history/ serves site/index.html
+
+  2. In Elementor, add an "HTML" widget to the page where the archive should
+     appear, and paste everything between the SNIPPET markers below.
+
+  3. Change the src if you uploaded to a different folder.
+
+  The script resizes the frame to fit its content. Without it the archive
+  either scrolls inside a short fixed box or gets cut off partway down.
+-->
+
+<!-- ================= SNIPPET STARTS HERE ================= -->
+<div class="rotary-archive-embed">
+  <iframe
+    id="rotary-archive"
+    src="/history/"
+    title="{{CLUB}} Archive"
+    loading="lazy"
+    style="width:100%;border:0;display:block;min-height:720px"
+    scrolling="no"></iframe>
+</div>
+
+<script>
+(function () {
+  var frame = document.getElementById('rotary-archive');
+  if (!frame) return;
+
+  window.addEventListener('message', function (event) {
+    var data = event.data;
+    if (!data || data.type !== 'rotary-archive-height') return;
+
+    // Only accept messages from the frame we created. Without this check any
+    // other embed on the page could resize this one.
+    if (event.source !== frame.contentWindow) return;
+
+    var height = parseInt(data.height, 10);
+    if (height > 0) frame.style.height = (height + 24) + 'px';
+  });
+
+  // Keep the browser from restoring a scroll position inside the frame when
+  // someone follows a deep link into the archive.
+  frame.addEventListener('load', function () {
+    frame.style.height = '720px';
+  });
+})();
+</script>
+<!-- ================== SNIPPET ENDS HERE ================== -->
+
+<!--
+  Notes
+  -----
+  * The archive uses hash routing (#/item/..., #/person/...), so deep links
+    work inside the iframe and do not need any server rewrite rules.
+
+  * If the club's host cannot serve a subfolder of static files, upload the
+    site anywhere that can (GitHub Pages, Netlify, Cloudflare Pages) and point
+    the iframe src at that URL instead. Everything else works unchanged.
+
+  * site/index.html also opens directly from disk with no server at all, which
+    is the quickest way to check a build before uploading it.
+-->

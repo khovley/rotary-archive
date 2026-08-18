@@ -3,14 +3,14 @@
 Turns iPhone photos of analogue club memorabilia — newspaper clippings,
 photographs, certificates, programs — into a searchable, interactive history.
 
-You lay several items out on a table, take one photo, and the pipeline finds
-each item, crops and straightens it, and (from Phase 2) reads and catalogues it
-with an LLM. You approve the results in batches, and the archive is published as
-a static site that drops into the club's WordPress site.
+You lay several items out on a table and take one photo. The pipeline finds each
+item, crops and straightens it, then reads and catalogues it with a vision
+model. You approve the results in batches, and the archive is published as a
+static site that drops into the club's WordPress page.
 
-**Status: Phases 1–2 complete.** Ingest, segmentation, rectification, LLM
-analysis, and the batch review UI all work. The site builder and publishing are
-still to come — see *Roadmap* below.
+**Status: Phases 1–3 complete.** Ingest, segmentation, rectification, LLM
+analysis, the batch review UI, and the published static site all work. Only
+uploading to the club's host is still to come — see *Roadmap* below.
 
 ---
 
@@ -43,6 +43,8 @@ in how well the automatic cropping works.
 | `rotary rectify` | Crop, deskew, and write masters plus web derivatives |
 | `rotary analyze` | Read and catalogue each item with a vision model |
 | `rotary review` | Open the batch approval UI |
+| `rotary build` | Generate the published static site |
+| `rotary serve` | Serve the built site locally to check it |
 | `rotary run` | ingest → segment → rectify, then review |
 | `rotary reset` | Discard items and crops so the pipeline can re-run |
 
@@ -104,7 +106,7 @@ the image that was approved, and a new crop is a different image.
 
 ```
 inbox/ ─► ingest ─► segment ─► rectify ─► analyze ─► review ─► build ─► publish
-                                                                (Phase 3) (Phase 4)
+                                                                          (Phase 4)
 ```
 
 **Ingest** content-addresses each photo by SHA-256, so re-dropping the same file
@@ -212,13 +214,13 @@ in review rather than passing silently.
 ## Layout
 
 ```
-config.toml           thresholds, paths, LLM provider settings
+config.toml           thresholds, paths, LLM provider, site metadata
 archive.db            SQLite - source of truth
 inbox/                drop photos here
 masters/originals/    untouched source photos, content-addressed
 masters/items/        full-resolution rectified items (never published)
 derivatives/          web-optimised WebP at 1600 / 800 / 320px
-site/                 generated static site (Phase 3)
+site/                 generated static site (the deliverable)
 src/rotary_archive/   the code
 tests/                test suite + synthetic table-shot generator
 ```
@@ -227,6 +229,59 @@ tests/                test suite + synthetic table-shot generator
 are the irreplaceable files, and the rest can always be regenerated from them.
 
 ---
+
+## The published site
+
+```bash
+rotary build              # everything analysed, for previewing
+rotary build --approved-only --serve   # the real publish, opened locally
+```
+
+Output lands in `site/` — a self-contained static folder with no server, no
+database, and no external requests:
+
+```
+site/
+  index.html      the archive
+  embed.html      WordPress/Elementor snippet, with instructions
+  assets/         one CSS file, one JS file
+  data/archive.js the whole catalogue
+  media/          WebP derivatives only — masters never leave your disk
+```
+
+Timeline by decade and year, gallery filtered by item type, live search across
+transcriptions and names, and indexes of people, organisations, places, and
+topics. Item pages carry the image, the transcription, entity links, and
+related items found through shared entities — weighted so a shared *person*
+counts for more than a shared topic, because two items naming the same person
+are far more likely to be genuinely connected than two both tagged
+"fundraising".
+
+**Dates are never flattened.** A date printed on the item renders plainly; one
+the model deduced renders as *about 1967* in italic gold, with the reasoning
+beside it. The footer explains the distinction. Letting a guess look like a
+fact is the failure mode this whole design is arranged against.
+
+An unidentified photograph says so, and invites the club to help rather than
+quietly leaving a blank — set `contact` under `[site]` in `config.toml` to
+include a way to reach you.
+
+Three things make it robust to where it ends up hosted: **hash routing**, so
+deep links work from any subdirectory and inside an iframe with no server
+rewrites; **data as a JS assignment rather than a JSON file**, because browsers
+block `fetch()` on `file://` and a JSON file would work when served and
+silently fail when opened from disk; and **no external requests at all**, so
+nothing breaks if a CDN goes away in ten years.
+
+### Putting it on the club's WordPress site
+
+1. Upload `site/` to the host, e.g. `https://yourclub.org/history/`
+2. Add an Elementor **HTML** widget and paste the snippet from `site/embed.html`
+
+The snippet includes a `postMessage` height sync so the iframe grows with its
+content instead of scrolling inside a short box. If the host can't serve static
+subfolders, put the site on any static host and point the iframe there —
+nothing else changes.
 
 ## Two rules the cataloguing prompt enforces
 
@@ -247,6 +302,9 @@ the item for a human.
 
 ## Roadmap
 
-- **Phase 3** — Static site: timeline, client-side search, people and topic
-  indexes, item detail pages.
-- **Phase 4** — Publishing and the WordPress/Elementor embed.
+- **Phase 4** — `rotary publish`: rsync/SFTP upload to the club's host, with a
+  dry run by default so nothing reaches a live site by accident. Until then,
+  upload `site/` however you normally would.
+
+Possible later, if the club wants it: a public "help us identify" form feeding
+corrections back into the archive, and OCR-assisted search across handwriting.
