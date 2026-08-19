@@ -267,3 +267,35 @@ def test_identical_files_under_different_names_are_one_photo(project, conn):
     state = inbox_state(project)
     assert state["present"] == 2
     assert state["waiting"] == 0, "a byte-identical copy is not a new photo"
+
+
+def test_the_crop_overlay_does_not_swallow_clicks():
+    """The outline SVG covers the source photograph exactly. Without
+    pointer-events:none every click lands on it and never reaches the image,
+    so clicking the photo to enlarge it did nothing at all - and nothing in
+    the markup or the handler looked wrong, which is why it survived a
+    rewrite of the viewer."""
+    from pathlib import Path
+
+    css = (
+        Path(__file__).resolve().parents[1]
+        / "src/rotary_archive/review/static/style.css"
+    ).read_text()
+    rule = next(
+        line for line in css.splitlines()
+        if line.startswith(".source svg")
+    )
+    assert "pointer-events: none" in rule, rule
+
+
+def test_the_source_photo_click_is_bound_to_the_container():
+    """Binding to the container rather than the <img> means a future overlay
+    cannot intercept the click the same way."""
+    from pathlib import Path
+
+    js = (
+        Path(__file__).resolve().parents[1]
+        / "src/rotary_archive/review/static/app.js"
+    ).read_text()
+    assert 'querySelectorAll(".source")' in js
+    assert 'querySelectorAll(".source img")' not in js

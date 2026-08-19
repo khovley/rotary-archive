@@ -432,9 +432,9 @@
       });
     });
 
-    app.querySelectorAll(".source img").forEach((img) => {
-      img.addEventListener("click", () => {
-        openSourcePhoto(img.closest(".photo").dataset.photo);
+    app.querySelectorAll(".source").forEach((source) => {
+      source.addEventListener("click", () => {
+        openSourcePhoto(source.closest(".photo").dataset.photo);
       });
     });
   }

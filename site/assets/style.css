@@ -432,3 +432,21 @@ mark { background: var(--mark); color: var(--ink); padding: 0 .15em; border-radi
   font-size: 0.85rem;
   color: var(--muted);
 }
+
+/* --- related items ------------------------------------------------------ */
+
+/* Deliberately a list of links, not thumbnails folded into the item. These
+   are separate records with their own titles and dates; presenting them as
+   pages of this one would misattribute them. */
+.facet.related ul { list-style: none; margin: 0; padding: 0; }
+
+.facet.related li {
+  padding: .45rem 0;
+  border-bottom: 1px solid var(--rule, rgb(0 0 0 / .08));
+}
+
+.facet.related li:last-child { border-bottom: 0; }
+
+.facet.related a { font-weight: 600; }
+
+.facet.related .muted { font-size: .85rem; }

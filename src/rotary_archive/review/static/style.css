@@ -155,7 +155,10 @@ kbd {
 
 .source { position: relative; align-self: start; }
 .source img { width: 100%; height: auto; display: block; border-radius: var(--radius-sm); border: 1px solid var(--line); }
-.source svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+/* The outline overlay covers the photograph exactly, so without this every
+   click lands on the SVG and never reaches the image underneath - which is
+   why clicking the source photo did nothing at all. */
+.source svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .source polygon { fill: rgba(42,102,71,.12); stroke: var(--accent); stroke-width: 3; vector-effect: non-scaling-stroke; }
 .source polygon.flagged { fill: rgba(150,86,15,.16); stroke: var(--warn); }
 .source polygon.sel { stroke-width: 6; fill: rgba(42,102,71,.3); }
@@ -434,7 +437,7 @@ kbd {
 }
 
 /* Anything clickable into the lightbox says so on hover. */
-.thumb, .source img { cursor: zoom-in; }
+.thumb, .source { cursor: zoom-in; }
 
 /* --- grouped items ------------------------------------------------------ */
 
