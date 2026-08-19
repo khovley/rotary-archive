@@ -66,6 +66,13 @@ CREATE TABLE IF NOT EXISTS items (
     needs_human_review   INTEGER NOT NULL DEFAULT 0,
     review_reason        TEXT,
 
+    -- Set when a vision pass judged this item to be a continuation of, or a
+    -- piece belonging to, another item: a story carried onto a second strip, a
+    -- photograph cut out alongside the article it illustrates.
+    part_of_item_id      TEXT REFERENCES items(id) ON DELETE SET NULL,
+    part_reason          TEXT,
+    headline             TEXT,   -- what the model read, for identification
+
     created_at           TEXT NOT NULL,
     updated_at           TEXT NOT NULL,
 
@@ -75,6 +82,9 @@ CREATE TABLE IF NOT EXISTS items (
 CREATE INDEX IF NOT EXISTS idx_items_photo ON items(photo_sha256);
 CREATE INDEX IF NOT EXISTS idx_items_status ON items(status);
 CREATE INDEX IF NOT EXISTS idx_items_flagged ON items(needs_human_review, status);
+-- idx_items_part_of is created by the migration in db.py: on a database that
+-- predates the column, this file's CREATE TABLE IF NOT EXISTS is a no-op and
+-- the column does not exist yet when the script runs.
 
 -- ------------------------------------------------------------ derivatives ---
 

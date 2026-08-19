@@ -36,6 +36,24 @@ Two lamps at 45° from opposite sides also works.
 
 **Camera.** Your iPhone is fine. Highest resolution, HEIC or JPEG both work.
 
+**Getting the photos off the phone without shrinking them.** This is easy to
+get wrong and hard to notice. A 12MP iPhone photo of eight clippings gives each
+one about 1400 pixels across, which is roughly what newsprint needs to be
+transcribed and to stay readable when a visitor zooms in. Dragging a photo out
+of the macOS Photos window, or emailing it to yourself, can hand you a 1024px
+copy instead — 0.8MP, about 6% of the original, and each clipping only 240
+pixels wide. The crop will look fine as a thumbnail and turn to mush the moment
+anyone zooms.
+
+Use **AirDrop**, or **File → Export → Export Unmodified Original** in Photos,
+or copy straight off the phone with Image Capture. `rotary ingest` warns you
+when a photo arrives under 4MP — take the warning seriously and re-export.
+
+Resolution affects *legibility*, not detection: on the built-in benchmark the
+detector finds every item with tight crops even at 0.9MP. Contrast and spacing
+are what decide whether the crops are right; resolution decides whether the
+result is worth reading.
+
 ---
 
 ## Laying out the items

@@ -186,9 +186,14 @@
             <span class="badge ${confClass}">crop ${conf}</span>
             <span class="badge">${escapeHtml(item.method || "?")}</span>
             ${item.rotation ? `<span class="badge">${item.rotation}°</span>` : ""}
+            ${item.part_of ? '<span class="badge part">part of a set</span>' : ""}
             ${statusBadge}
           </div>
+          ${item.headline
+            ? `<span class="headline" title="What the model read off this item">${escapeHtml(item.headline)}</span>`
+            : ""}
           ${renderAnalysis(item)}
+          ${renderGrouping(item)}
           ${item.reason ? `<span class="muted reason">${escapeHtml(item.reason)}</span>` : ""}
         </div>
         <div class="card-actions">
@@ -203,6 +208,35 @@
                   title="Send this item to the model again">Re-read</button>
         </div>
       </article>`;
+  }
+
+  /* A clipping the model judged to be part of another one - a story carried
+     onto a second strip, a photograph cut out alongside its article. Shown
+     with the reason, because this is a judgement call that has to be easy to
+     overrule: a wrong link would bury one item inside another on the site. */
+  function renderGrouping(item) {
+    if (!item.part_of) return "";
+    const parent = state.photos
+      .flatMap((p) => p.items)
+      .find((i) => i.id === item.part_of);
+    const name = (parent && parent.headline) || item.part_of;
+    return `
+      <div class="grouping">
+        <span>Part of <a href="#" data-act="goto" data-item="${item.part_of}">${escapeHtml(name)}</a></span>
+        ${item.part_reason ? `<span class="muted">${escapeHtml(item.part_reason)}</span>` : ""}
+        <button data-act="ungroup" data-item="${item.id}" class="ghost tiny">Not part of it</button>
+      </div>`;
+  }
+
+  async function ungroup(itemId) {
+    await api(`/api/item/${itemId}/group`, {
+      method: "POST",
+      body: JSON.stringify({ part_of: null }),
+    });
+    const item = state.photos.flatMap((p) => p.items).find((i) => i.id === itemId);
+    if (item) { item.part_of = null; item.part_reason = null; }
+    render();
+    toast("Ungrouped — it will publish as its own item");
   }
 
   function updateSummary() {
@@ -295,6 +329,8 @@
           else if (act === "crop") openEditor(item);
           else if (act === "edit") openFieldEditor(item);
           else if (act === "reanalyze") await reanalyze(item, btn);
+          else if (act === "goto") { ev.preventDefault(); selectItem(item); }
+          else if (act === "ungroup") await ungroup(item);
           else if (act === "approve-photo") {
             const group = state.photos.find((p) => p.sha256 === photo);
             await decide(group.items.filter(matchesFilter).map((i) => i.id), "approved");

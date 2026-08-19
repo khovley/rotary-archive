@@ -160,10 +160,17 @@ class PipelineJob:
                 counts={**self.counts, "flagged": stats["flagged"]},
             )
 
-            problems = [f"{p.name}: {why}" for p, why in ingested.unreadable]
-            if problems:
-                self._set(message="Finished, with files that could not be read.",
-                          error="; ".join(problems[:5]))
+            notices = [f"{p.name}: {why}" for p, why in ingested.unreadable]
+            if ingested.low_resolution:
+                names = ", ".join(n for n, _ in ingested.low_resolution[:3])
+                notices.append(
+                    f"{len(ingested.low_resolution)} photo(s) are low-resolution "
+                    f"({names}) - these look like photo-library exports. Add the "
+                    "unmodified originals instead; there is far more detail in them."
+                )
+            if notices:
+                self._set(message="Finished, with something worth reading.",
+                          error="; ".join(notices[:5]))
         except Exception as exc:
             self._set(
                 state="error", stage="error", error=f"{type(exc).__name__}: {exc}",
@@ -331,6 +338,12 @@ def _item_payload(conn: sqlite3.Connection, cfg: Config, item: sqlite3.Row) -> d
         "width": item["master_width"],
         "height": item["master_height"],
         "has_master": bool(item["master_path"]),
+        # What the segmentation pass read off the item, and whether it judged
+        # this piece to belong with another one. Shown in review so a wrong
+        # grouping can be spotted before it reaches the site.
+        "headline": item["headline"],
+        "part_of": item["part_of_item_id"],
+        "part_reason": item["part_reason"],
         "analysis": None,
     }
 
@@ -573,6 +586,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._delete_item(conn, path.split("/")[3])
             if path.startswith("/api/item/") and path.endswith("/fields"):
                 return self._edit_fields(conn, path.split("/")[3], body)
+            if path.startswith("/api/item/") and path.endswith("/group"):
+                return self._set_group(conn, path.split("/")[3], body)
             if path.startswith("/api/item/") and path.endswith("/reanalyze"):
                 return self._reanalyze(conn, path.split("/")[3])
             if path.startswith("/api/photo/") and path.endswith("/item"):
@@ -743,6 +758,33 @@ class Handler(BaseHTTPRequestHandler):
             )
             conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
         self._json({"ok": True, "deleted": item_id})
+
+    def _set_group(self, conn: sqlite3.Connection, item_id: str, body: dict) -> None:
+        """Link this item to the one it is part of, or cut the link loose.
+
+        `part_of: null` breaks the grouping. The model makes this call from the
+        text - a continued headline, a matching byline - and it is the kind of
+        judgement that is right most of the time and confidently wrong the
+        rest, so a human has to be able to undo it in one click.
+        """
+        parent = body.get("part_of")
+        if parent is not None:
+            parent = str(parent)
+            if parent == item_id:
+                raise ValueError("an item cannot be part of itself")
+            if db.get_item(conn, parent) is None:
+                raise ValueError(f"no such item: {parent}")
+
+        with db.transaction(conn):
+            db.set_item_part_of(conn, item_id, parent, body.get("reason") or None)
+            db.log_review(
+                conn,
+                item_id=item_id,
+                action="group" if parent else "ungroup",
+                detail=parent,
+                actor="review-ui",
+            )
+        self._json({"ok": True, "id": item_id, "part_of": parent})
 
     def _edit_fields(self, conn: sqlite3.Connection, item_id: str, body: dict) -> None:
         """Apply a human's corrections to the live analysis.

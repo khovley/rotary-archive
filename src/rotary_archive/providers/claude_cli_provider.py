@@ -50,7 +50,18 @@ class ClaudeCLIProvider(VisionProvider):
 
         try:
             completed = subprocess.run(
-                [self.executable, "-p", prompt, "--model", self.model],
+                [
+                    self.executable, "-p", prompt, "--model", self.model,
+                    # The nested CLI needs exactly one capability: opening the
+                    # image it is being asked about. Left unrestricted it
+                    # treats the request as a task to work on, goes looking for
+                    # the project, tries to run a script, hits a permission
+                    # prompt it cannot answer, and reports that instead of
+                    # returning the JSON - so the photo comes back with no
+                    # items and no error anyone can act on.
+                    "--allowed-tools", "Read",
+                    "--permission-mode", "acceptEdits",
+                ],
                 capture_output=True,
                 text=True,
                 timeout=self.timeout,

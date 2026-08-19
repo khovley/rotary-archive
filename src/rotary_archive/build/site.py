@@ -195,9 +195,54 @@ def build_records(
                 "sizes": sorted(sizes),
                 "w": item["master_width"],
                 "h": item["master_height"],
+                # Which item this one belongs with, if any. Resolved into
+                # `pages` by fold_groups before the site is written.
+                "part_of": item["part_of_item_id"] or "",
+                "part_reason": item["part_reason"] or "",
+                "pages": [],
             }
         )
     return records
+
+
+def fold_groups(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Publish an article carried across several clippings as one entry.
+
+    A story continued on a second strip, or a photograph cut out alongside the
+    article it illustrates, is one thing to a reader and should read as one
+    thing on the site - with the extra scans as further pages, and their text
+    folded into the searchable body so a phrase from the second column still
+    finds the article.
+
+    A child whose parent did not make it into this build is promoted back to a
+    top-level entry rather than dropped. That case is ordinary, not
+    exceptional: parent and child are approved separately, and losing a
+    clipping because its neighbour was still pending would be silent.
+    """
+    by_id = {record["id"]: record for record in records}
+    absorbed: set[str] = set()
+
+    for record in records:
+        parent_id = record["part_of"]
+        parent = by_id.get(parent_id) if parent_id != record["id"] else None
+        if parent is None:
+            continue
+
+        absorbed.add(record["id"])
+        parent["pages"].append(
+            {
+                "id": record["id"],
+                "alt": record["alt"],
+                "sizes": record["sizes"],
+                "w": record["w"],
+                "h": record["h"],
+                "note": record["part_reason"],
+            }
+        )
+        if record["text"]:
+            parent["text"] = f"{parent['text']}\n\n{record['text']}".strip()
+
+    return [record for record in records if record["id"] not in absorbed]
 
 
 def build_entity_index(records: list[dict[str, Any]]) -> dict[str, list[dict]]:
@@ -273,9 +318,18 @@ def copy_media(
     out_dir.mkdir(parents=True, exist_ok=True)
     copied = total_bytes = 0
 
-    for record in records:
-        for size in record["sizes"]:
-            row = derivatives[record["id"]][size]
+    # A record's own scan plus any further pages folded into it. The pages
+    # are no longer top-level records, so iterating records alone would ship
+    # a page whose <img> points at a file that was never copied.
+    wanted = [
+        (entry["id"], entry["sizes"])
+        for record in records
+        for entry in (record, *record.get("pages", []))
+    ]
+
+    for item_id, sizes in wanted:
+        for size in sizes:
+            row = derivatives[item_id][size]
             source = paths.absolute(row["path"])
             if not source.exists():
                 continue
@@ -328,7 +382,7 @@ def build_site(
     items = publishable_items(conn, approved_only=approved_only)
     entities = entity_map(conn)
     derivatives = derivative_map(conn)
-    records = build_records(conn, items, entities, derivatives)
+    records = fold_groups(build_records(conn, items, entities, derivatives))
 
     entity_index = build_entity_index(records)
     timeline = build_timeline(records)

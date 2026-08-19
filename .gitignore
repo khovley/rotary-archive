@@ -22,3 +22,6 @@ exports/
 # Never commit credentials.
 .env
 secrets.toml
+
+# Transient resized copies handed to the vision model.
+.rotary-vision-*

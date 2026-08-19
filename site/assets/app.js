@@ -267,6 +267,27 @@
       ${grid(items, "Nothing here.")}`;
   }
 
+  /* Further scans belonging to the same article: a story continued on a
+     second strip, or a photograph cut out alongside the piece it illustrates.
+     They are pages of one item here, not separate entries, which is how a
+     reader met them on the page. */
+  function pages(item) {
+    const extra = item.pages || [];
+    if (!extra.length) return "";
+    return `
+      <div class="item-pages">
+        <h2>More of this item</h2>
+        ${extra.map((page) => `
+          <figure>
+            <a href="${media(page, 99999)}" target="_blank" rel="noopener">
+              <img src="${media(page, A.sizes.detail)}" srcset="${srcset(page)}"
+                   sizes="(max-width: 900px) 100vw, 640px" alt="${esc(page.alt)}">
+            </a>
+            ${page.note ? `<figcaption>${esc(page.note)}</figcaption>` : ""}
+          </figure>`).join("")}
+      </div>`;
+  }
+
   function viewItem(id) {
     const item = byId.get(id);
     if (!item) return '<p class="empty">That item is not in the archive.</p>';
@@ -289,6 +310,7 @@
                    sizes="(max-width: 900px) 100vw, 640px"
                    alt="${esc(item.alt)}">
             </a>` : '<div class="noimg big"></div>'}
+          ${pages(item)}
         </div>
 
         <div class="item-info">

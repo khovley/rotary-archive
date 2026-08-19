@@ -38,12 +38,44 @@ def connect(database: Path, *, create: bool = True) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(_schema_sql())
+    _migrate(conn)
     conn.execute(
         "INSERT INTO schema_meta(key, value) VALUES('version', ?) "
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         (SCHEMA_VERSION,),
     )
     return conn
+
+
+# Columns added after the first release. CREATE TABLE IF NOT EXISTS will not
+# add them to a database that already exists, so they are applied here.
+_ADDED_COLUMNS = {
+    "items": [
+        ("part_of_item_id", "TEXT REFERENCES items(id) ON DELETE SET NULL"),
+        ("part_reason", "TEXT"),
+        ("headline", "TEXT"),
+    ],
+}
+
+
+# Indexes over columns the migration adds. They cannot live in schema.sql: on a
+# database created before the column existed, CREATE TABLE IF NOT EXISTS is a
+# no-op, so the script would try to index a column that is not there yet.
+_ADDED_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_items_part_of ON items(part_of_item_id)",
+]
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    for table, columns in _ADDED_COLUMNS.items():
+        existing = {
+            row["name"] for row in conn.execute(f"PRAGMA table_info({table})")
+        }
+        for name, decl in columns:
+            if name not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+    for statement in _ADDED_INDEXES:
+        conn.execute(statement)
 
 
 @contextmanager
@@ -159,6 +191,7 @@ def insert_item(
     detection_method: str,
     needs_human_review: bool = False,
     review_reason: str | None = None,
+    headline: str | None = None,
 ) -> None:
     quad_json = json.dumps([[float(x), float(y)] for x, y in quad])
     now = utcnow()
@@ -166,9 +199,9 @@ def insert_item(
         """
         INSERT INTO items (id, photo_sha256, seq, quad, quad_detected,
                            detection_confidence, detection_method,
-                           needs_human_review, review_reason,
+                           needs_human_review, review_reason, headline,
                            status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'detected', ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'detected', ?, ?)
         """,
         (
             item_id,
@@ -180,9 +213,21 @@ def insert_item(
             detection_method,
             int(needs_human_review),
             review_reason,
+            headline,
             now,
             now,
         ),
+    )
+
+
+def set_item_part_of(
+    conn: sqlite3.Connection, item_id: str, parent_id: str | None, reason: str | None
+) -> None:
+    """Link an item to the one it continues, or clear the link."""
+    conn.execute(
+        "UPDATE items SET part_of_item_id = ?, part_reason = ?, updated_at = ? "
+        "WHERE id = ?",
+        (parent_id, reason, utcnow(), item_id),
     )
 
 

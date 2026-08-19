@@ -42,6 +42,15 @@ iou_merge_threshold = 0.35
 # photo is of one item, shot close up.
 single_item_frac = 0.85
 
+# Ask a vision model to read the photo and mark out each item, then snap those
+# regions onto the real paper edges. Contour detection alone cannot tell that a
+# headline strip belongs to the columns beneath it, or that two strips are one
+# story continued - which is most of what a table of overlapping newsprint is.
+#
+# Costs one model call per photo, so it is off by default. Turn it on here, or
+# per run with `rotary segment --ai`.
+use_vision = false
+
 [rectify]
 # Residual rotation search range for the fine deskew, in degrees. Perspective
 # correction handles the gross angle; this cleans up the last fraction.
@@ -145,4 +154,7 @@ analyze_image_size = 1600
 # ollama_host = "http://127.0.0.1:11434"
 # ollama_timeout = 300
 # claude_executable = "claude"
-# cli_timeout = 300
+# Reading a whole table of clippings and marking out every one takes the CLI
+# noticeably longer than cataloguing a single cropped item, and the correction
+# pass longer still. 300s is enough for analysis but truncates segmentation.
+cli_timeout = 900

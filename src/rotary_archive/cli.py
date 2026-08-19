@@ -117,6 +117,20 @@ def _do_ingest(cfg: Config, conn: sqlite3.Connection, move: bool) -> int:
         )
     for path, reason in result.unreadable:
         console.print(f"[red]Could not read {path.name}: {reason}[/red]")
+
+    if result.low_resolution:
+        console.print(
+            f"[yellow]{len(result.low_resolution)} photo(s) are too "
+            f"low-resolution for good results:[/yellow]"
+        )
+        for name, mp in result.low_resolution[:5]:
+            console.print(f"  [yellow]{name} — {mp} MP[/yellow]")
+        console.print(
+            "[dim]These look like photo-library exports. In Photos use "
+            "File > Export > Export Unmodified Original, or AirDrop straight "
+            "from the phone — a 12MP original has ~15x more detail, which is "
+            "the difference between readable newsprint and a grey smudge.[/dim]"
+        )
     return len(result.ingested)
 
 
@@ -134,10 +148,33 @@ def ingest(
 # ---------------------------------------------------------------- segment ---
 
 
-def _do_segment(cfg: Config, conn: sqlite3.Connection, force: bool) -> int:
+def _do_segment(
+    cfg: Config, conn: sqlite3.Connection, force: bool, use_vision: bool | None = None
+) -> int:
     from .segment import segment_pending
 
     flag_below = float(cfg.review.get("flag_below_confidence", 0.80))
+
+    # One model call per photo, so this is opt-in. It reads the page and marks
+    # out each item, which contour detection cannot do - it has no idea that a
+    # headline strip belongs to the columns beneath it.
+    wants_vision = (
+        bool(cfg.segment.get("use_vision", False)) if use_vision is None
+        else use_vision
+    )
+    provider = None
+    if wants_vision:
+        from .providers import ProviderError, build_provider
+
+        try:
+            provider = build_provider(cfg.llm)
+        except ProviderError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=2)
+        console.print(
+            f"[dim]Reading each photo with {provider.name} / {provider.model} "
+            "before deciding boundaries.[/dim]"
+        )
     todo = len(
         db.all_photos(conn) if force else db.photos_with_status(conn, "ingested")
     )
@@ -155,6 +192,7 @@ def _do_segment(cfg: Config, conn: sqlite3.Connection, force: bool) -> int:
         results = segment_pending(
             conn, cfg.paths, cfg.segment, flag_below=flag_below, force=force,
             progress=lambda p: ui.update(f"Segmenting {p['original_name']}"),
+            provider=provider,
         )
 
     found = sum(len(r.candidates) for r in results)
@@ -177,10 +215,15 @@ def segment(
     force: bool = typer.Option(
         False, "--force", help="Re-segment photos that were already processed."
     ),
+    ai: Optional[bool] = typer.Option(
+        None, "--ai/--no-ai",
+        help="Read each photo with a vision model before deciding boundaries. "
+             "Costs one model call per photo. Defaults to [segment] use_vision.",
+    ),
 ) -> None:
     """Find the individual items in each ingested photo."""
     cfg, conn = _load()
-    _do_segment(cfg, conn, force)
+    _do_segment(cfg, conn, force, use_vision=ai)
 
 
 # ---------------------------------------------------------------- rectify ---

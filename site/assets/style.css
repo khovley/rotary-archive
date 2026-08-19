@@ -405,3 +405,30 @@ mark { background: var(--mark); color: var(--ink); padding: 0 .15em; border-radi
   .hero h1, .stats dd { color: #000; }
   .lede, .stats dt { color: #333; }
 }
+
+/* --- further pages of one item ------------------------------------------ */
+
+.item-pages { margin-top: 1.5rem; }
+
+.item-pages h2 {
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 0.6rem;
+}
+
+.item-pages figure { margin: 0 0 1rem; }
+
+.item-pages img {
+  width: 100%;
+  height: auto;
+  border-radius: 2px;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.18);
+}
+
+.item-pages figcaption {
+  margin-top: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}

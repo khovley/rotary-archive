@@ -51,6 +51,9 @@ class SegmentResult:
     candidates: list[Candidate] = field(default_factory=list)
     note: str | None = None
     needs_review: bool = False
+    # Present only on a vision pass: what the model read, including which
+    # items it thinks belong together.
+    vision_regions: list[Any] = field(default_factory=list)
 
 
 # ------------------------------------------------------------ preparation ---
@@ -577,6 +580,60 @@ def segment_image(path: Path, cfg: dict[str, Any]) -> SegmentResult:
     return result
 
 
+def segment_image_with_vision(
+    path: Path, cfg: dict[str, Any], provider: Any
+) -> SegmentResult:
+    """LLM-guided segmentation, falling back to contours if it cannot run.
+
+    The model decides how many items there are and which is which; watershed
+    over the paper mask decides where each boundary falls. Anything the model
+    marks as part of another item is carried through so review and the site can
+    keep them together.
+    """
+    from .vision_segment import segment_with_vision
+
+    vision = segment_with_vision(path, provider)
+    if not vision.ok or len(vision.regions) == 0:
+        result = segment_image(path, cfg)
+        result.note = (
+            f"vision pass unavailable ({vision.error or 'no items returned'}); "
+            "used contour detection"
+        ) if vision.error else result.note
+        return result
+
+    result = SegmentResult(photo_sha256="")
+    for region in vision.regions:
+        quad = geometry.clip_quad(region.quad(), *_image_size(path))
+        # A region the watershed never snapped to paper is the model's raw
+        # guess, and those come back noticeably loose - say so in the score.
+        confidence = region.confidence * (1.0 if region.refined else 0.6)
+        result.candidates.append(
+            Candidate(
+                quad=quad,
+                confidence=round(min(1.0, confidence), 4),
+                method="vision" if region.refined else "vision_raw",
+                area_frac=float(
+                    geometry.quad_area(quad) / max(1.0, float(np.prod(_image_size(path))))
+                ),
+            )
+        )
+
+    result.vision_regions = vision.regions
+    grouped = sum(1 for r in vision.regions if r.part_of >= 0)
+    notes = [f"{len(vision.regions)} item(s) identified by reading the page"]
+    if grouped:
+        notes.append(f"{grouped} marked as part of another item")
+    result.note = "; ".join(notes)
+    return result
+
+
+def _image_size(path: Path) -> tuple[int, int]:
+    from .ingest import load_oriented
+
+    with load_oriented(path) as img:
+        return img.size
+
+
 def segment_photo_row(
     conn: sqlite3.Connection,
     paths: Any,
@@ -584,14 +641,21 @@ def segment_photo_row(
     cfg: dict[str, Any],
     *,
     flag_below: float = 0.70,
+    provider: Any = None,
 ) -> SegmentResult:
     """Segment one photo row and persist the resulting items."""
     source = paths.absolute(photo["stored_path"])
-    result = segment_image(source, cfg)
+    result = (
+        segment_image_with_vision(source, cfg, provider)
+        if provider is not None
+        else segment_image(source, cfg)
+    )
     result.photo_sha256 = photo["sha256"]
 
+    regions = result.vision_regions
     with db.transaction(conn):
         db.delete_items_for_photo(conn, photo["sha256"])
+        item_ids: list[str] = []
         for seq, cand in enumerate(result.candidates):
             flagged = cand.confidence < flag_below or result.needs_review
             reason = None
@@ -600,9 +664,11 @@ def segment_photo_row(
                     result.note
                     or f"detection confidence {cand.confidence:.2f} below {flag_below:.2f}"
                 )
+            item_id = db.make_item_id(photo["sha256"], seq)
+            item_ids.append(item_id)
             db.insert_item(
                 conn,
-                item_id=db.make_item_id(photo["sha256"], seq),
+                item_id=item_id,
                 photo_sha256=photo["sha256"],
                 seq=seq,
                 quad=cand.as_list(),
@@ -610,7 +676,20 @@ def segment_photo_row(
                 detection_method=cand.method,
                 needs_human_review=flagged,
                 review_reason=reason,
+                headline=regions[seq].headline if seq < len(regions) else None,
             )
+
+        # Links are written after every row exists, because part_of_item_id is
+        # a foreign key onto a sibling that may not have been inserted yet.
+        for seq, region in enumerate(regions):
+            if seq >= len(item_ids) or region.part_of < 0:
+                continue
+            if region.part_of >= len(item_ids):
+                continue
+            db.set_item_part_of(
+                conn, item_ids[seq], item_ids[region.part_of], region.part_reason
+            )
+
         db.set_photo_status(conn, photo["sha256"], "segmented", result.note)
 
     return result
@@ -624,6 +703,7 @@ def segment_pending(
     flag_below: float = 0.70,
     force: bool = False,
     progress: Any = None,
+    provider: Any = None,
 ) -> list[SegmentResult]:
     """Segment every photo that hasn't been segmented yet (or all, with force)."""
     photos = (
@@ -634,6 +714,8 @@ def segment_pending(
         if progress is not None:
             progress(photo)
         results.append(
-            segment_photo_row(conn, paths, photo, cfg, flag_below=flag_below)
+            segment_photo_row(
+                conn, paths, photo, cfg, flag_below=flag_below, provider=provider
+            )
         )
     return results

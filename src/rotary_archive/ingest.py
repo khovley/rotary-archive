@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import shutil
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
@@ -62,11 +62,20 @@ _KEEP_EXIF = {
 _TAG_NAMES = {v: k for k, v in ExifTags.TAGS.items()}
 
 
+# Below this, a table shot cannot carry enough detail to segment cleanly or
+# transcribe at all. A 12MP iPhone photo of eight clippings gives each one
+# roughly 1400px across, which is about what newsprint needs; 2MP gives 500px,
+# which is not enough to read. Photo library exports are the usual culprit -
+# macOS Photos hands out 1024px JPEGs unless told otherwise.
+LOW_RESOLUTION_MP = 4.0
+
+
 @dataclass
 class IngestResult:
     ingested: list[str]
     skipped_duplicate: list[Path]
     unreadable: list[tuple[Path, str]]
+    low_resolution: list[tuple[str, float]] = field(default_factory=list)
 
     @property
     def total_seen(self) -> int:
@@ -91,6 +100,8 @@ def find_photos(inbox: Path) -> list[Path]:
         for p in inbox.rglob("*")
         if p.is_file()
         and p.suffix.lower() in SUPPORTED_SUFFIXES
+        # Dotfiles are skipped, which also covers the transient
+        # .rotary-vision-* copies handed to the vision model.
         and not p.name.startswith(".")
     )
 
@@ -207,6 +218,10 @@ def ingest_inbox(
                 size_bytes=stored.stat().st_size,
             )
         result.ingested.append(sha)
+
+        megapixels = (meta["width"] or 0) * (meta["height"] or 0) / 1_000_000
+        if megapixels and megapixels < LOW_RESOLUTION_MP:
+            result.low_resolution.append((source.name, round(megapixels, 1)))
 
         if move:
             source.unlink(missing_ok=True)
