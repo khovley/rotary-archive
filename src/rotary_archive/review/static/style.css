@@ -390,14 +390,33 @@ kbd {
   font: 12px/1 var(--mono); opacity: .85;
 }
 
+/* Deliberately NOT a centering flex container. An absolutely positioned child
+   of a centred flex box gets a static position derived from the alignment, so
+   a 4000px master starts life at a large negative offset and every translate()
+   the script computes lands somewhere else entirely - the image would open
+   off-screen. The canvas is pinned to 0,0 and the script owns its position. */
 .lb-stage {
   flex: 1; overflow: hidden; position: relative;
-  display: flex; align-items: center; justify-content: center;
   cursor: grab; touch-action: none;
 }
 .lb-stage.panning { cursor: grabbing; }
+.lb-canvas {
+  position: absolute; top: 0; left: 0; transform-origin: 0 0;
+}
+.lb-boxes {
+  position: absolute; top: 0; left: 0;
+  width: 100%; height: 100%; overflow: visible; pointer-events: none;
+}
+.lb-boxes polygon {
+  fill: none; stroke: #ff5a3c; vector-effect: non-scaling-stroke; stroke-width: 2;
+}
+.lb-boxes polygon.sel { stroke: #4ade80; stroke-width: 3; }
+.lb-boxes text {
+  fill: #fff; paint-order: stroke; stroke: rgba(0, 0, 0, .75); stroke-width: 4px;
+  font: 600 13px var(--mono); dominant-baseline: hanging;
+}
 .lb-stage img {
-  position: absolute; transform-origin: 0 0;
+  display: block; transform-origin: 0 0;
   image-rendering: auto; user-select: none; -webkit-user-drag: none;
   /* A checkerboard behind the image makes a crop that clipped into the table
      obvious - a dark edge against dark backdrop otherwise reads as nothing. */
@@ -450,3 +469,7 @@ button.tiny {
   padding: 0.1rem 0.4rem;
   font-size: 0.75rem;
 }
+
+/* A toggled-off Boxes button has to look off, or the outlines being hidden
+   reads as the photo having no crops at all. */
+#lb-boxes.off { opacity: .5; }

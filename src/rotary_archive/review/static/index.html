@@ -3,6 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Inline, so the review page makes no external requests and does not log a
+     404 for a favicon on every load. -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%2317458f'/><path d='M4 4h5a2.5 2.5 0 010 5H6l4 3H8L4 9V4zm2 1.5v2h2.6a1 1 0 000-2H6z' fill='%23fff'/></svg>">
 <title>Rotary Archive — Review</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -34,6 +37,9 @@
     <div><kbd>R</kbd><span>rotate 90°</span></div>
     <div><kbd>C</kbd><span>open crop editor</span></div>
     <div><kbd>E</kbd><span>edit catalogue fields</span></div>
+    <div><kbd>Z</kbd><span>enlarge this crop</span></div>
+    <div><kbd>S</kbd><span>source photo with all crops drawn on it</span></div>
+    <div><kbd>B</kbd><span>toggle crop outlines (in the viewer)</span></div>
     <div><kbd>Shift</kbd>+<kbd>A</kbd><span>approve everything visible</span></div>
     <div><kbd>P</kbd><span>approve rest of this photo</span></div>
     <div><kbd>Esc</kbd><span>close editor</span></div>
@@ -54,11 +60,17 @@
       <button id="lb-in" title="Zoom in (+)">+</button>
       <button id="lb-fit" title="Fit to window (0)">Fit</button>
       <button id="lb-full" title="Actual size (1)">1:1</button>
+      <button id="lb-boxes" title="Show crop outlines (b)" hidden>Boxes</button>
       <button id="lb-close" class="primary" title="Close (Esc)">Close</button>
     </span>
   </div>
   <div id="lb-stage" class="lb-stage">
-    <img id="lb-img" alt="">
+    <!-- Image and crop outlines share one transformed layer, so the outlines
+         stay welded to the pixels they describe at every zoom level. -->
+    <div id="lb-canvas" class="lb-canvas">
+      <img id="lb-img" alt="">
+      <svg id="lb-boxes-svg" class="lb-boxes" aria-hidden="true"></svg>
+    </div>
   </div>
   <p class="lb-hint muted">Drag to pan · scroll to zoom · <kbd>Esc</kbd> to close</p>
 </div>

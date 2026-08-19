@@ -110,6 +110,10 @@
             <button data-act="add-item" data-photo="${photo.sha256}" class="ghost">
               Add missed item
             </button>
+            <button data-act="source" data-photo="${photo.sha256}" class="ghost"
+                    title="Full-size source photo with every crop drawn on it">
+              Inspect crops
+            </button>
           </div>
         </div>
         <div class="photo-body">
@@ -204,6 +208,8 @@
           ${item.analysis
             ? `<button data-act="edit" data-item="${item.id}" class="ghost">Edit</button>`
             : ""}
+          <button data-act="source" data-item="${item.id}" class="ghost"
+                  title="See this crop on the full source photo (s)">In photo</button>
           <button data-act="reanalyze" data-item="${item.id}" class="ghost"
                   title="Send this item to the model again">Re-read</button>
         </div>
@@ -331,6 +337,11 @@
           else if (act === "reanalyze") await reanalyze(item, btn);
           else if (act === "goto") { ev.preventDefault(); selectItem(item); }
           else if (act === "ungroup") await ungroup(item);
+          else if (act === "source") {
+            const sha = photo || (state.photos.find((p) =>
+              p.items.some((i) => i.id === item)) || {}).sha256;
+            if (sha) openSourcePhoto(sha, item);
+          }
           else if (act === "approve-photo") {
             const group = state.photos.find((p) => p.sha256 === photo);
             await decide(group.items.filter(matchesFilter).map((i) => i.id), "approved");
@@ -358,11 +369,27 @@
 
     app.querySelectorAll(".source img").forEach((img) => {
       img.addEventListener("click", () => {
-        const sha = img.closest(".photo").dataset.photo;
-        const photo = state.photos.find((p) => p.sha256 === sha);
-        openLightbox(`/media/photo/${sha}?full=1`, photo ? photo.name : sha);
+        openSourcePhoto(img.closest(".photo").dataset.photo);
       });
     });
+  }
+
+  /* The source photo at full resolution with every crop drawn on it. This is
+     the view that answers "did it miss one, and did it cut that headline in
+     half" - questions no amount of looking at the individual crops can settle,
+     because a crop cannot show you what fell outside it. */
+  function openSourcePhoto(sha, highlight) {
+    const photo = state.photos.find((p) => p.sha256 === sha);
+    if (!photo) return;
+    openLightbox(
+      `/media/photo/${sha}?full=1`,
+      `${photo.name} · ${photo.items.length} crop(s)`,
+      photo.items.map((item) => ({
+        quad: item.quad,
+        label: String(item.seq),
+        selected: item.id === (highlight || state.selected),
+      }))
+    );
   }
 
   async function reanalyze(id, button) {
@@ -595,6 +622,9 @@
       else if (key === "-" || key === "_") { ev.preventDefault(); zoomLightbox(1 / 1.25); }
       else if (key === "0") { ev.preventDefault(); fitLightbox(); }
       else if (key === "1") { ev.preventDefault(); $("#lb-full").click(); }
+      else if (key === "b" && lb.boxes.length) {
+        ev.preventDefault(); toggleLightboxBoxes();
+      }
       return;
     }
 
@@ -631,6 +661,10 @@
       } else if (key === "z" && state.selected) {
         ev.preventDefault();
         openLightbox(`/media/item/${state.selected}?full=1`, state.selected);
+      } else if (key === "s" && state.selected) {
+        ev.preventDefault();
+        const found = findItem(state.selected);
+        if (found) openSourcePhoto(found.photo.sha256, state.selected);
       } else if (key === "p" && state.selected) {
         ev.preventDefault();
         const found = findItem(state.selected);
@@ -663,15 +697,27 @@
 
   const lb = {
     scale: 1, x: 0, y: 0, natural: [0, 0], panning: false, from: null,
+    boxes: [], showBoxes: true,
   };
 
-  function openLightbox(src, title) {
+  function stageBox() {
+    return $("#lb-stage").getBoundingClientRect();
+  }
+
+  /* `boxes` are quads in the natural pixel coordinates of the image being
+     shown, so they survive zooming without any recalculation - the SVG shares
+     the transformed layer with the image. */
+  function openLightbox(src, title, boxes) {
     const img = $("#lb-img");
     $("#lb-title").textContent = title || "";
     $("#lightbox").hidden = false;
 
+    lb.boxes = boxes || [];
+    $("#lb-boxes").hidden = lb.boxes.length === 0;
+
     img.onload = () => {
       lb.natural = [img.naturalWidth, img.naturalHeight];
+      drawLightboxBoxes();
       fitLightbox();
     };
     // Cache-bust so a re-cropped item never shows the previous version.
@@ -681,19 +727,63 @@
   function closeLightbox() {
     $("#lightbox").hidden = true;
     $("#lb-img").src = "";
+    lb.boxes = [];
+  }
+
+  function drawLightboxBoxes() {
+    const svg = $("#lb-boxes-svg");
+    const [w, h] = lb.natural;
+    svg.setAttribute("viewBox", `0 0 ${w || 1} ${h || 1}`);
+    svg.style.display = lb.showBoxes && lb.boxes.length ? "" : "none";
+    if (!lb.showBoxes || !lb.boxes.length) { svg.innerHTML = ""; return; }
+
+    svg.innerHTML = lb.boxes.map((box) => {
+      const points = box.quad.map((p) => `${p[0]},${p[1]}`).join(" ");
+      const [x, y] = box.quad[0];
+      // The label is drawn at the image's own scale, then counter-scaled at
+      // render time by the font size, so it stays legible when zoomed out.
+      const size = Math.max(w, h) / 45;
+      return `
+        <polygon points="${points}" class="${box.selected ? "sel" : ""}"></polygon>
+        <text x="${x + size * 0.3}" y="${y + size * 0.3}"
+              style="font-size:${size}px">${escapeHtml(box.label)}</text>`;
+    }).join("");
+  }
+
+  function toggleLightboxBoxes() {
+    lb.showBoxes = !lb.showBoxes;
+    $("#lb-boxes").classList.toggle("off", !lb.showBoxes);
+    drawLightboxBoxes();
   }
 
   function applyLightbox() {
-    const img = $("#lb-img");
-    img.style.width = `${lb.natural[0]}px`;
-    img.style.height = `${lb.natural[1]}px`;
-    img.style.transform =
-      `translate(${lb.x}px, ${lb.y}px) scale(${lb.scale})`;
+    const canvas = $("#lb-canvas");
+    canvas.style.width = `${lb.natural[0]}px`;
+    canvas.style.height = `${lb.natural[1]}px`;
+    canvas.style.transform = `translate(${lb.x}px, ${lb.y}px) scale(${lb.scale})`;
     $("#lb-zoom").textContent = `${Math.round(lb.scale * 100)}%`;
   }
 
+  /* Panning must not be able to lose the image. Without this you can flick it
+     past the edge of the stage and be left looking at an empty backdrop with
+     no way back except Fit - which reads as the viewer being broken. A margin
+     of the image always stays on screen. */
+  function clampLightbox() {
+    const stage = stageBox();
+    const w = lb.natural[0] * lb.scale;
+    const h = lb.natural[1] * lb.scale;
+    const keep = 80;
+
+    lb.x = w <= stage.width
+      ? Math.min(Math.max(lb.x, 0), stage.width - w)
+      : Math.min(Math.max(lb.x, stage.width - w - keep), keep);
+    lb.y = h <= stage.height
+      ? Math.min(Math.max(lb.y, 0), stage.height - h)
+      : Math.min(Math.max(lb.y, stage.height - h - keep), keep);
+  }
+
   function fitLightbox() {
-    const stage = $("#lb-stage").getBoundingClientRect();
+    const stage = stageBox();
     const [w, h] = lb.natural;
     if (!w || !h) return;
     // Never scale a small crop above 1:1 on "fit" - blowing up a 300px
@@ -705,7 +795,7 @@
   }
 
   function zoomLightbox(factor, originX, originY) {
-    const stage = $("#lb-stage").getBoundingClientRect();
+    const stage = stageBox();
     const cx = originX ?? stage.width / 2;
     const cy = originY ?? stage.height / 2;
     const next = Math.min(8, Math.max(0.05, lb.scale * factor));
@@ -713,6 +803,7 @@
     lb.x = cx - (cx - lb.x) * (next / lb.scale);
     lb.y = cy - (cy - lb.y) * (next / lb.scale);
     lb.scale = next;
+    clampLightbox();
     applyLightbox();
   }
 
@@ -723,17 +814,23 @@
     $("#lb-fit").addEventListener("click", fitLightbox);
     $("#lb-in").addEventListener("click", () => zoomLightbox(1.25));
     $("#lb-out").addEventListener("click", () => zoomLightbox(1 / 1.25));
+    $("#lb-boxes").addEventListener("click", toggleLightboxBoxes);
     $("#lb-full").addEventListener("click", () => {
-      const rect = stage.getBoundingClientRect();
-      lb.x = (rect.width - lb.natural[0]) / 2;
-      lb.y = (rect.height - lb.natural[1]) / 2;
+      // Centre 1:1 on whatever is currently in the middle of the stage, so
+      // zooming to actual size keeps you where you were looking.
+      const rect = stageBox();
+      const cx = (rect.width / 2 - lb.x) / lb.scale;
+      const cy = (rect.height / 2 - lb.y) / lb.scale;
       lb.scale = 1;
+      lb.x = rect.width / 2 - cx;
+      lb.y = rect.height / 2 - cy;
+      clampLightbox();
       applyLightbox();
     });
 
     stage.addEventListener("wheel", (ev) => {
       ev.preventDefault();
-      const rect = stage.getBoundingClientRect();
+      const rect = stageBox();
       zoomLightbox(
         ev.deltaY < 0 ? 1.15 : 1 / 1.15,
         ev.clientX - rect.left, ev.clientY - rect.top
@@ -750,6 +847,7 @@
       if (!lb.panning) return;
       lb.x = ev.clientX - lb.from[0];
       lb.y = ev.clientY - lb.from[1];
+      clampLightbox();
       applyLightbox();
     });
     ["pointerup", "pointercancel"].forEach((type) =>
