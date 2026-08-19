@@ -46,6 +46,7 @@ MAX_LENGTHS = {
     "title": 300,
     "summary": 4000,
     "alt_text": 600,
+    "visual_description": 4000,
     "review_reason": 600,
     "date_note": 1000,
     "condition_notes": 1000,
@@ -184,6 +185,14 @@ def consistency_flags(clean: dict[str, Any]) -> list[str]:
         reasons.append("marked as text but no transcription returned")
     if clean["date_source"] == "printed" and not clean["full_text"]:
         reasons.append("date claimed as printed but nothing was transcribed")
+    # A photograph with no transcription and no visual description has nothing
+    # for search to match on. It would be in the archive and unfindable.
+    if (
+        clean["presentation"] == "image"
+        and not clean["full_text"]
+        and not clean["visual_description"]
+    ):
+        reasons.append("nothing describing the picture, so it cannot be found")
     if not clean["title"]:
         reasons.append("no title")
 
@@ -283,9 +292,9 @@ def store_analysis(
                 item_type, title, summary, full_text,
                 date_value, date_precision, date_source, date_note,
                 presentation, legibility, condition_notes, alt_text,
-                rotary_context, orientation_hint, confidence,
+                visual_description, rotary_context, orientation_hint, confidence,
                 needs_human_review, review_reason, raw_json, usage_json
-            ) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 item_id, result.provider, result.model, db.utcnow(),
@@ -293,7 +302,8 @@ def store_analysis(
                 clean["full_text"], clean["date_value"], clean["date_precision"],
                 clean["date_source"], clean["date_note"], clean["presentation"],
                 clean["legibility"], clean["condition_notes"], clean["alt_text"],
-                clean["rotary_context"], clean["orientation_hint"],
+                clean["visual_description"], clean["rotary_context"],
+                clean["orientation_hint"],
                 clean["confidence"], int(needs_review), reason_text,
                 json.dumps(clean, ensure_ascii=False),
                 json.dumps(result.usage) if result.usage else None,
@@ -335,6 +345,8 @@ def write_export(paths: Any, item_id: str, clean: dict[str, Any]) -> Path | None
     body = [clean["title"], "=" * max(3, len(clean["title"])), ""]
     if clean["summary"]:
         body += [f"*{clean['summary']}*", ""]
+    if clean["visual_description"]:
+        body += ["> " + clean["visual_description"], ""]
     body += [clean["full_text"].rstrip(), ""]
     if clean["rotary_context"]:
         body += ["---", "", clean["rotary_context"], ""]

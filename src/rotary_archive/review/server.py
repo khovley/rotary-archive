@@ -293,7 +293,7 @@ ANALYSIS_FIELDS = (
     "item_type", "title", "summary", "full_text",
     "date_value", "date_precision", "date_source", "date_note",
     "presentation", "legibility", "condition_notes", "alt_text",
-    "rotary_context", "orientation_hint", "confidence",
+    "visual_description", "rotary_context", "orientation_hint", "confidence",
 )
 
 # Fields a human may correct in the review UI. Everything else is the model's
@@ -302,7 +302,8 @@ EDITABLE_FIELDS = frozenset(
     {
         "item_type", "title", "summary", "full_text",
         "date_value", "date_precision", "date_source",
-        "presentation", "condition_notes", "alt_text", "rotary_context",
+        "presentation", "condition_notes", "alt_text", "visual_description",
+        "rotary_context",
     }
 )
 
@@ -344,6 +345,12 @@ def _item_payload(conn: sqlite3.Connection, cfg: Config, item: sqlite3.Row) -> d
         "headline": item["headline"],
         "part_of": item["part_of_item_id"],
         "part_reason": item["part_reason"],
+        "duplicate_of": item["duplicate_of_item_id"],
+        "related": [
+            {"id": row["related_item_id"], "reason": row["reason"],
+             "source": row["source"]}
+            for row in db.related_items(conn, item["id"])
+        ],
         "analysis": None,
     }
 
@@ -588,6 +595,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._edit_fields(conn, path.split("/")[3], body)
             if path.startswith("/api/item/") and path.endswith("/group"):
                 return self._set_group(conn, path.split("/")[3], body)
+            if path.startswith("/api/item/") and path.endswith("/link"):
+                return self._set_link(conn, path.split("/")[3], body)
+            if path.startswith("/api/item/") and path.endswith("/duplicate"):
+                return self._set_duplicate(conn, path.split("/")[3], body)
             if path.startswith("/api/item/") and path.endswith("/reanalyze"):
                 return self._reanalyze(conn, path.split("/")[3])
             if path.startswith("/api/photo/") and path.endswith("/item"):
@@ -785,6 +796,57 @@ class Handler(BaseHTTPRequestHandler):
                 actor="review-ui",
             )
         self._json({"ok": True, "id": item_id, "part_of": parent})
+
+    def _set_link(self, conn: sqlite3.Connection, item_id: str, body: dict) -> None:
+        """Add or remove a link that does not merge the two items."""
+        other = body.get("related_to")
+        if not other:
+            raise ValueError("related_to is required")
+        other = str(other)
+        if other == item_id:
+            raise ValueError("an item cannot be related to itself")
+        if db.get_item(conn, other) is None:
+            raise ValueError(f"no such item: {other}")
+
+        remove = bool(body.get("remove"))
+        with db.transaction(conn):
+            if remove:
+                db.unlink_items(conn, item_id, other)
+            else:
+                db.link_items(
+                    conn, item_id, other, body.get("reason") or None, source="human"
+                )
+            db.log_review(
+                conn, item_id=item_id,
+                action="unlink" if remove else "link",
+                detail=other, actor="review-ui",
+            )
+        self._json({"ok": True, "id": item_id, "related_to": other, "removed": remove})
+
+    def _set_duplicate(
+        self, conn: sqlite3.Connection, item_id: str, body: dict
+    ) -> None:
+        """Mark this item as a second copy of another, or clear the mark.
+
+        The duplicate stays in the archive either way - it is part of what was
+        in the box - but a marked one does not reach the site.
+        """
+        original = body.get("duplicate_of")
+        if original is not None:
+            original = str(original)
+            if original == item_id:
+                raise ValueError("an item cannot be a duplicate of itself")
+            if db.get_item(conn, original) is None:
+                raise ValueError(f"no such item: {original}")
+
+        with db.transaction(conn):
+            db.set_item_duplicate_of(conn, item_id, original)
+            db.log_review(
+                conn, item_id=item_id,
+                action="duplicate" if original else "unduplicate",
+                detail=original, actor="review-ui",
+            )
+        self._json({"ok": True, "id": item_id, "duplicate_of": original})
 
     def _edit_fields(self, conn: sqlite3.Connection, item_id: str, body: dict) -> None:
         """Apply a human's corrections to the live analysis.

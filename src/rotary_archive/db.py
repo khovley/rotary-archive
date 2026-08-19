@@ -54,8 +54,43 @@ _ADDED_COLUMNS = {
         ("part_of_item_id", "TEXT REFERENCES items(id) ON DELETE SET NULL"),
         ("part_reason", "TEXT"),
         ("headline", "TEXT"),
+        # Two copies of the same clipping is ordinary in a scrapbook. The
+        # duplicate is kept, not deleted - the archive records what was in the
+        # box - but only one of them should reach the site.
+        ("duplicate_of_item_id", "TEXT REFERENCES items(id) ON DELETE SET NULL"),
+    ],
+    "analyses": [
+        # A fuller reading of the picture than alt_text, which stays a single
+        # screen-reader sentence. For a photograph this is the only thing
+        # search has to match on, since full_text is empty.
+        ("visual_description", "TEXT"),
     ],
 }
+
+
+# Tables added after the first release. Written here rather than in schema.sql
+# for the same reason as the columns: the script runs before this migration and
+# an older database has already satisfied CREATE TABLE IF NOT EXISTS.
+_ADDED_TABLES = [
+    """
+    -- A link between two items that does NOT merge them.
+    --
+    -- part_of_item_id is a merge: a story carried onto a second strip becomes
+    -- one entry. That is wrong for a glossy ShelterBox brochure lying on top
+    -- of a newspaper story about ShelterBox - same subject, different object,
+    -- different publisher. Folding it in would have the archive claim the
+    -- Davis Clipper printed it. So this is a graph, not a tree: many-to-many,
+    -- both directions, and neither item loses its own catalogue entry.
+    CREATE TABLE IF NOT EXISTS item_links (
+        item_id         TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+        related_item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+        reason          TEXT,
+        source          TEXT NOT NULL DEFAULT 'model',   -- model | human
+        created_at      TEXT NOT NULL,
+        PRIMARY KEY (item_id, related_item_id)
+    )
+    """,
+]
 
 
 # Indexes over columns the migration adds. They cannot live in schema.sql: on a
@@ -63,6 +98,9 @@ _ADDED_COLUMNS = {
 # no-op, so the script would try to index a column that is not there yet.
 _ADDED_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_items_part_of ON items(part_of_item_id)",
+    "CREATE INDEX IF NOT EXISTS idx_items_duplicate ON items(duplicate_of_item_id)",
+    "CREATE INDEX IF NOT EXISTS idx_item_links_related "
+    "ON item_links(related_item_id)",
 ]
 
 
@@ -74,6 +112,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         for name, decl in columns:
             if name not in existing:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+    for statement in _ADDED_TABLES:
+        conn.execute(statement)
     for statement in _ADDED_INDEXES:
         conn.execute(statement)
 
@@ -229,6 +269,69 @@ def set_item_part_of(
         "WHERE id = ?",
         (parent_id, reason, utcnow(), item_id),
     )
+
+
+def set_item_duplicate_of(
+    conn: sqlite3.Connection, item_id: str, original_id: str | None
+) -> None:
+    """Mark an item as a second copy of another, or clear the mark.
+
+    The duplicate stays in the archive - it is part of what was in the box, and
+    the two copies may be cropped or lit differently - but only the original
+    reaches the site.
+    """
+    conn.execute(
+        "UPDATE items SET duplicate_of_item_id = ?, updated_at = ? WHERE id = ?",
+        (original_id, utcnow(), item_id),
+    )
+
+
+def link_items(
+    conn: sqlite3.Connection,
+    item_id: str,
+    related_item_id: str,
+    reason: str | None = None,
+    source: str = "model",
+) -> None:
+    """Record that two items belong together without merging them.
+
+    Stored symmetrically. A reader looking at the ShelterBox brochure should
+    find the newspaper story, and a reader on the story should find the
+    brochure; which one happened to be listed first is an accident of the order
+    the model returned them and should not decide what the site can show.
+    """
+    if item_id == related_item_id:
+        return
+    now = utcnow()
+    for a, b in ((item_id, related_item_id), (related_item_id, item_id)):
+        conn.execute(
+            "INSERT INTO item_links (item_id, related_item_id, reason, source, "
+            "created_at) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(item_id, related_item_id) DO UPDATE SET "
+            "reason = excluded.reason, source = excluded.source",
+            (a, b, reason, source, now),
+        )
+
+
+def unlink_items(
+    conn: sqlite3.Connection, item_id: str, related_item_id: str
+) -> None:
+    conn.execute(
+        "DELETE FROM item_links WHERE (item_id = ? AND related_item_id = ?) "
+        "OR (item_id = ? AND related_item_id = ?)",
+        (item_id, related_item_id, related_item_id, item_id),
+    )
+
+
+def related_items(conn: sqlite3.Connection, item_id: str) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM item_links WHERE item_id = ? ORDER BY related_item_id",
+        (item_id,),
+    ).fetchall()
+
+
+def all_item_links(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute("SELECT * FROM item_links").fetchall()
 
 
 def items_for_photo(conn: sqlite3.Connection, photo_sha256: str) -> list[sqlite3.Row]:

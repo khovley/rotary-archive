@@ -114,6 +114,7 @@ def publishable_items(
         SELECT i.*, a.item_type, a.title, a.summary, a.full_text,
                a.date_value, a.date_precision, a.date_source, a.date_note,
                a.presentation, a.legibility, a.condition_notes, a.alt_text,
+               a.visual_description,
                a.rotary_context, a.confidence AS analysis_confidence
           FROM items i
           JOIN current_analyses a ON a.item_id = i.id
@@ -185,6 +186,9 @@ def build_records(
                 "year": year_of(item["date_value"] or ""),
                 "presentation": item["presentation"] or "image",
                 "alt": item["alt_text"] or item["title"] or "Archive item",
+                # Search leans on this for photographs, which have no
+                # transcription to match against.
+                "visual": item["visual_description"] or "",
                 "condition": item["condition_notes"] or "",
                 "rotary": item["rotary_context"] or "",
                 "legibility": item["legibility"],
@@ -199,7 +203,10 @@ def build_records(
                 # `pages` by fold_groups before the site is written.
                 "part_of": item["part_of_item_id"] or "",
                 "part_reason": item["part_reason"] or "",
+                "duplicate_of": item["duplicate_of_item_id"] or "",
                 "pages": [],
+                # Filled by attach_related once the surviving set is known.
+                "related": [],
             }
         )
     return records
@@ -242,7 +249,49 @@ def fold_groups(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if record["text"]:
             parent["text"] = f"{parent['text']}\n\n{record['text']}".strip()
 
-    return [record for record in records if record["id"] not in absorbed]
+    # A second copy of the same page is kept in the archive but must not
+    # appear twice on the site. It drops out here rather than at query time so
+    # the timeline, the search index and the entity counts all agree.
+    return [
+        record for record in records
+        if record["id"] not in absorbed
+        and not (record["duplicate_of"] and record["duplicate_of"] in by_id)
+    ]
+
+
+def attach_related(
+    records: list[dict[str, Any]], links: list[sqlite3.Row]
+) -> list[dict[str, Any]]:
+    """Hang each record's related items off it, for the site to cross-link.
+
+    This is the relationship that does *not* merge. Both items keep their own
+    entry, their own title and their own date; the link only means a reader
+    looking at one should be able to find the other. Links pointing at an item
+    that did not make it into this build - still pending, rejected, or folded
+    in as a page - are dropped rather than published as dead ends.
+    """
+    published = {record["id"]: record for record in records}
+
+    for link in links:
+        source = published.get(link["item_id"])
+        target = published.get(link["related_item_id"])
+        if source is None or target is None or source is target:
+            continue
+        source["related"].append(
+            {
+                "id": target["id"],
+                "title": target["title"],
+                "type": target["type"],
+                "date_display": target["date_display"],
+                "reason": link["reason"] or "",
+                "sizes": target["sizes"],
+                "alt": target["alt"],
+            }
+        )
+
+    for record in records:
+        record["related"].sort(key=lambda entry: (entry["date_display"], entry["title"]))
+    return records
 
 
 def build_entity_index(records: list[dict[str, Any]]) -> dict[str, list[dict]]:
@@ -383,6 +432,7 @@ def build_site(
     entities = entity_map(conn)
     derivatives = derivative_map(conn)
     records = fold_groups(build_records(conn, items, entities, derivatives))
+    records = attach_related(records, db.all_item_links(conn))
 
     entity_index = build_entity_index(records)
     timeline = build_timeline(records)

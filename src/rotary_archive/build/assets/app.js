@@ -86,7 +86,13 @@
       const title = item.title.toLowerCase();
       const names = [...item.people, ...item.orgs, ...item.places, ...item.topics]
         .map((e) => e.name.toLowerCase()).join(" ");
-      const body = (item.summary + " " + item.text).toLowerCase();
+      /* alt and rotary are indexed deliberately. A photograph has no
+         transcription, so its visual description is the only thing that can
+         match a query - without these, a picture of a banner presentation is
+         unfindable by the word "banner". */
+      const body = [
+        item.summary, item.text, item.visual, item.alt, item.rotary,
+      ].join(" ").toLowerCase();
 
       let score = 0;
       let matchedAll = true;
@@ -271,6 +277,30 @@
      second strip, or a photograph cut out alongside the piece it illustrates.
      They are pages of one item here, not separate entries, which is how a
      reader met them on the page. */
+  /* Explicit links, distinct from the "Related items" band further down.
+     That one is computed from shared entities - a guess, however good. This
+     one is an assertion someone made about these two specific objects: a
+     ticket beside the programme for that night, a charity's brochure beside a
+     news story about it. They are NOT pages of this item, so they keep their
+     own entry and link out to it. */
+  function seeAlso(item) {
+    const links = item.related || [];
+    if (!links.length) return "";
+    return `
+      <div class="facet related">
+        <h2>See also</h2>
+        <ul>
+          ${links.map((entry) => `
+            <li>
+              <a href="#/item/${encodeURIComponent(entry.id)}">${esc(entry.title)}</a>
+              <span class="muted">${esc(typeLabel(entry.type))}${
+                entry.date_display ? " · " + esc(entry.date_display) : ""}</span>
+              ${entry.reason ? `<div class="muted">${esc(entry.reason)}</div>` : ""}
+            </li>`).join("")}
+        </ul>
+      </div>`;
+  }
+
   function pages(item) {
     const extra = item.pages || [];
     if (!extra.length) return "";
@@ -329,6 +359,8 @@
              <div class="chips">${chips(item.places, "place")}</div></div>` : ""}
           ${item.topics.length ? `<div class="facet"><h2>Topics</h2>
              <div class="chips">${chips(item.topics, "topic")}</div></div>` : ""}
+
+          ${seeAlso(item)}
 
           ${item.condition ? `<p class="muted small">Condition: ${
             esc(item.condition)}</p>` : ""}

@@ -17,6 +17,7 @@ from fake_provider import FakeProvider
 from rotary_archive import geometry
 from rotary_archive.vision_segment import (
     GRID,
+    MEDIA,
     VISION_LONG_EDGE,
     Region,
     _parse_regions,
@@ -38,10 +39,18 @@ def entry(box, **kw):
     base = {
         "box": box,
         "kind": "newspaper_clipping",
+        "medium": "newsprint",
         "headline": "A Headline",
+        "date_hint": "",
         "shape_note": "",
+        "panels": 1,
+        "clipped_by_frame": False,
         "part_of": -1,
         "part_reason": "",
+        "related_to": [],
+        "related_reason": "",
+        "duplicate_of": -1,
+        "link_confidence": 0.9,
         "confidence": 0.9,
     }
     base.update(kw)
@@ -257,3 +266,110 @@ def test_the_temporary_copy_is_always_cleaned_up(scene):
         propose_regions(path, FakeProvider(responder=explode))
 
     assert list(path.parent.glob(".rotary-vision-*")) == []
+
+
+# ---------------------------------------------- the three relationship kinds --
+
+# These three are deliberately separate, and the tests below pin the
+# difference. Using the wrong one damages the record: part_of publishes two
+# objects as one entry under one title, and duplicate_of hides one from the
+# site entirely.
+
+
+def two(**second):
+    return _parse_regions(
+        [entry([0, 0, 100, 100]), entry([200, 200, 400, 400], **second)],
+        1000, 1000,
+    )
+
+
+def test_related_to_survives_and_does_not_merge():
+    regions = two(related_to=[0], related_reason="the charity's own leaflet")
+    assert regions[1].related_to == [0]
+    assert regions[1].related_reason == "the charity's own leaflet"
+    # It must not have quietly become a merge.
+    assert regions[1].part_of == -1
+
+
+def test_duplicate_of_survives():
+    assert two(duplicate_of=0)[1].duplicate_of == 0
+
+
+@pytest.mark.parametrize("field,bad", [
+    ("part_of", 9), ("duplicate_of", 9), ("part_of", 1), ("duplicate_of", 1),
+])
+def test_a_link_pointing_nowhere_is_dropped(field, bad):
+    """Out of range, or an item pointing at itself. A bad link is worse than
+    no link - one buries an item inside another, the other hides it."""
+    regions = two(**{field: bad})
+    assert getattr(regions[1], field) == -1
+
+
+def test_related_indexes_are_cleaned_and_deduplicated():
+    regions = two(related_to=[0, 0, 1, 7, -3], related_reason="same night")
+    assert regions[1].related_to == [0]
+
+
+def test_related_reason_is_dropped_when_no_link_survives():
+    regions = two(related_to=[42], related_reason="points at nothing")
+    assert regions[1].related_to == []
+    assert regions[1].related_reason == ""
+
+
+def test_a_merge_wins_over_a_duplicate_claim():
+    """An item cannot both continue another and be a copy of one. The merge is
+    the stronger claim, and letting both stand would hide the item twice."""
+    regions = two(part_of=0, part_reason="continues", duplicate_of=0)
+    assert regions[1].part_of == 0
+    assert regions[1].duplicate_of == -1
+
+
+# ------------------------------------------------- the descriptive fields ----
+
+
+def test_medium_is_captured_and_unknown_values_fall_back():
+    """The signal that separates a glossy brochure from the newsprint it lies
+    on: same subject, different object, different publisher."""
+    regions = _parse_regions(
+        [entry([0, 0, 100, 100], medium="glossy_print"),
+         entry([200, 200, 300, 300], medium="papyrus")],
+        1000, 1000,
+    )
+    assert regions[0].medium == "glossy_print"
+    assert regions[1].medium == "other"
+    assert "glossy_print" in MEDIA
+
+
+def test_panels_records_a_folded_item_without_splitting_it():
+    """A programme opened flat is one object showing two panels. The crease is
+    a strong straight edge and must not become a crop boundary."""
+    region = _parse_regions([entry([0, 0, 500, 300], panels=2)], 1000, 1000)[0]
+    assert region.panels == 2
+
+
+@pytest.mark.parametrize("value", [0, -4, None, "two"])
+def test_panels_is_never_less_than_one(value):
+    assert _parse_regions([entry([0, 0, 100, 100], panels=value)], 1000, 1000)[0].panels == 1
+
+
+def test_clipped_by_frame_and_date_hint_are_carried():
+    region = _parse_regions(
+        [entry([0, 0, 100, 100], clipped_by_frame=True, date_hint="Nov. 29, 1982")],
+        1000, 1000,
+    )[0]
+    assert region.clipped_by_frame is True
+    assert region.date_hint == "Nov. 29, 1982"
+
+
+def test_link_confidence_is_separate_from_box_confidence():
+    """An uncaptioned photograph under an article is probably that article's
+    photograph, but position is weak evidence. The boundary can be certain
+    while the attribution is not."""
+    region = _parse_regions(
+        [entry([0, 0, 100, 100]),
+         entry([0, 200, 100, 300], part_of=0, part_reason="sits below it",
+               confidence=0.95, link_confidence=0.3)],
+        1000, 1000,
+    )[1]
+    assert region.confidence == 0.95
+    assert region.link_confidence == 0.3

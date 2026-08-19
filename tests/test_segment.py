@@ -224,3 +224,84 @@ def test_irregular_clippings_are_not_rejected(tmp_path, seg_config):
     # than trimming to the tidy rectangular column.
     assert x0 <= 175 and y0 <= 225
     assert x1 >= 925 and y1 >= 1125
+
+
+# ------------------------------------------------- relationship persistence --
+
+
+def test_write_links_persists_all_three_relationships(tmp_path):
+    """The vision pass can assert three different things about how items
+    relate, and they are stored three different ways because they mean three
+    different things to the site: a merge, a cross-reference, and a hide."""
+    from rotary_archive import db
+    from rotary_archive.segment import _write_links
+    from rotary_archive.vision_segment import Region
+
+    conn = db.connect(tmp_path / "t.db")
+    with db.transaction(conn):
+        db.insert_photo(
+            conn, sha256="a" * 64, original_name="p.jpg", stored_path="p.jpg",
+            width=100, height=100, captured_at=None, exif=None, size_bytes=1,
+        )
+        ids = []
+        for seq in range(4):
+            item_id = f"{'a' * 12}-{seq:02d}"
+            db.insert_item(
+                conn, item_id=item_id, photo_sha256="a" * 64, seq=seq,
+                quad=[[0, 0], [1, 0], [1, 1], [0, 1]],
+                detection_confidence=0.9, detection_method="vision",
+            )
+            ids.append(item_id)
+
+    regions = [
+        Region(box=(0, 0, 1, 1)),
+        Region(box=(0, 0, 1, 1), part_of=0, part_reason="continues the story"),
+        Region(box=(0, 0, 1, 1), related_to=[0], related_reason="same event"),
+        Region(box=(0, 0, 1, 1), duplicate_of=0),
+    ]
+    with db.transaction(conn):
+        _write_links(conn, regions, ids)
+
+    rows = {row["id"]: row for row in db.items_for_photo(conn, "a" * 64)}
+    assert rows[ids[1]]["part_of_item_id"] == ids[0]
+    assert rows[ids[1]]["part_reason"] == "continues the story"
+    assert rows[ids[3]]["duplicate_of_item_id"] == ids[0]
+
+    # The cross-reference is stored both ways round: which item the model
+    # happened to list first must not decide what a reader can navigate to.
+    assert [r["related_item_id"] for r in db.related_items(conn, ids[2])] == [ids[0]]
+    assert [r["related_item_id"] for r in db.related_items(conn, ids[0])] == [ids[2]]
+    # And it did not merge them.
+    assert rows[ids[2]]["part_of_item_id"] is None
+
+
+def test_write_links_ignores_indexes_past_the_item_list(tmp_path):
+    """Defence in depth: the parser already drops these, but _write_links
+    turns an index into a foreign key and must not trust its input."""
+    from rotary_archive import db
+    from rotary_archive.segment import _write_links
+    from rotary_archive.vision_segment import Region
+
+    conn = db.connect(tmp_path / "t.db")
+    with db.transaction(conn):
+        db.insert_photo(
+            conn, sha256="b" * 64, original_name="p.jpg", stored_path="p.jpg",
+            width=100, height=100, captured_at=None, exif=None, size_bytes=1,
+        )
+        db.insert_item(
+            conn, item_id="b" * 12 + "-00", photo_sha256="b" * 64, seq=0,
+            quad=[[0, 0], [1, 0], [1, 1], [0, 1]],
+            detection_confidence=0.9, detection_method="vision",
+        )
+
+    with db.transaction(conn):
+        _write_links(
+            conn,
+            [Region(box=(0, 0, 1, 1), part_of=7, related_to=[9], duplicate_of=5)],
+            ["b" * 12 + "-00"],
+        )
+
+    row = db.items_for_photo(conn, "b" * 64)[0]
+    assert row["part_of_item_id"] is None
+    assert row["duplicate_of_item_id"] is None
+    assert db.related_items(conn, row["id"]) == []

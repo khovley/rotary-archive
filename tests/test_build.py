@@ -12,6 +12,7 @@ from fake_provider import GOOD_RESPONSE, FakeProvider
 from rotary_archive import db
 from rotary_archive.analyze import analyze_items
 from rotary_archive.build.site import (
+    attach_related,
     fold_groups,
     build_entity_index,
     build_timeline,
@@ -329,7 +330,11 @@ def page(item_id, *, part_of="", text="", reason=""):
         "h": 1200,
         "part_of": part_of,
         "part_reason": reason,
+        "duplicate_of": "",
         "pages": [],
+        "related": [],
+        "type": "newspaper_clipping",
+        "date_display": "",
     }
 
 
@@ -393,3 +398,68 @@ def test_folded_pages_keep_their_images(analysed):
     for size in parent["pages"][0]["sizes"]:
         name = f"{items[1]['id']}-{size}.webp"
         assert (site_dir / "media" / name).exists(), f"{name} was not published"
+
+
+# ------------------------------------------- related items and duplicates ---
+
+
+def test_related_items_are_linked_not_merged():
+    """The distinction the whole relationship split exists for.
+
+    A charity's own glossy brochure lying beside a newspaper story about that
+    charity is not a page of the story - a different publisher printed it.
+    Both keep their own entry; the link only means a reader on one can find
+    the other.
+    """
+    records = [page("story"), page("brochure")]
+    links = [
+        {"item_id": "story", "related_item_id": "brochure",
+         "reason": "the charity's own leaflet, kept with the cutting"},
+        {"item_id": "brochure", "related_item_id": "story", "reason": "as above"},
+    ]
+    out = attach_related(records, links)
+
+    assert [r["id"] for r in out] == ["story", "brochure"]
+    assert [e["id"] for e in out[0]["related"]] == ["brochure"]
+    assert [e["id"] for e in out[1]["related"]] == ["story"]
+    assert out[0]["related"][0]["reason"].startswith("the charity's own")
+    # Crucially, neither absorbed the other.
+    assert out[0]["pages"] == [] and out[1]["pages"] == []
+
+
+def test_a_link_to_an_unpublished_item_is_dropped():
+    """Items are approved separately, so a link can point at something not in
+    this build. Publishing it would be a dead end."""
+    out = attach_related([page("a")], [
+        {"item_id": "a", "related_item_id": "not-approved", "reason": "x"},
+    ])
+    assert out[0]["related"] == []
+
+
+def test_a_duplicate_copy_does_not_reach_the_site():
+    """Two copies of the same page is ordinary in a scrapbook. Both stay in the
+    archive; only one is published, or the timeline and the entity counts would
+    disagree with each other."""
+    original = page("page2")
+    copy = page("page2-again")
+    copy["duplicate_of"] = "page2"
+
+    folded = fold_groups([original, copy])
+    assert [r["id"] for r in folded] == ["page2"]
+
+
+def test_a_duplicate_of_something_unpublished_is_kept():
+    """If the original is not in this build, the copy is the only witness left
+    and must not vanish too."""
+    copy = page("copy")
+    copy["duplicate_of"] = "never-approved"
+    assert [r["id"] for r in fold_groups([copy])] == ["copy"]
+
+
+def test_visual_description_reaches_the_site_record(analysed):
+    """A photograph has no transcription, so this is the only thing search can
+    match against."""
+    project, conn = analysed
+    build_site(conn, project.paths, project.site)
+    payload = load_payload(project.paths.site)
+    assert all("visual" in record for record in payload["items"])

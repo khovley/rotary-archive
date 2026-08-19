@@ -125,6 +125,14 @@ ITEM_SCHEMA: dict[str, Any] = {
         "alt_text": _string(
             "One sentence describing the image for a screen reader."
         ),
+        "visual_description": _string(
+            "What is actually visible in the picture, for a reader who cannot "
+            "see it and for search to match on: who and how many people, what "
+            "they are doing, the setting, banners, insignia, signage, objects "
+            "on show, and anything that dates the scene such as clothing or "
+            "vehicles. Describe only what is there. Empty string for an item "
+            "that is purely text."
+        ),
         "orientation_hint": {
             "type": "string",
             "enum": ORIENTATIONS,
@@ -154,6 +162,7 @@ ITEM_SCHEMA: dict[str, Any] = {
         "date_value", "date_precision", "date_source", "date_note",
         "people", "organizations", "places", "topics", "rotary_context",
         "presentation", "legibility", "condition_notes", "alt_text",
+        "visual_description",
         "orientation_hint", "confidence", "needs_human_review", "review_reason",
     ],
 }
@@ -190,6 +199,14 @@ On transcription: `full_text` should be a faithful transcription, not a summary.
 Preserve the original wording, spelling, and line breaks. Mark unreadable \
 passages `[illegible]` rather than guessing at them. This text is what the \
 archive's search will index, so it matters more than any other field.
+
+On describing pictures: `alt_text` is one sentence for a screen reader. \
+`visual_description` is the fuller account, and for a photograph it is the \
+most important field in the record - there is no transcription to fall back \
+on, so it is the only thing the archive's search can match. Say what is \
+visible: how many people, what they are doing, the room, the banner behind \
+them, the insignia on it, what is on the table. Do not name anyone whose name \
+you cannot read on the item, and do not infer the occasion from the setting.
 
 On `presentation`: decide how the item best serves a reader. A dense column of \
 newsprint is easier to read as transcribed text, so choose "text". A portrait, \

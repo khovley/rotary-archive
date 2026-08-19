@@ -191,6 +191,9 @@
             <span class="badge">${escapeHtml(item.method || "?")}</span>
             ${item.rotation ? `<span class="badge">${item.rotation}°</span>` : ""}
             ${item.part_of ? '<span class="badge part">part of a set</span>' : ""}
+            ${item.duplicate_of ? '<span class="badge dup">duplicate</span>' : ""}
+            ${(item.related || []).length
+              ? `<span class="badge rel">${item.related.length} linked</span>` : ""}
             ${statusBadge}
           </div>
           ${item.headline
@@ -198,6 +201,7 @@
             : ""}
           ${renderAnalysis(item)}
           ${renderGrouping(item)}
+          ${renderLinks(item)}
           ${item.reason ? `<span class="muted reason">${escapeHtml(item.reason)}</span>` : ""}
         </div>
         <div class="card-actions">
@@ -232,6 +236,65 @@
         ${item.part_reason ? `<span class="muted">${escapeHtml(item.part_reason)}</span>` : ""}
         <button data-act="ungroup" data-item="${item.id}" class="ghost tiny">Not part of it</button>
       </div>`;
+  }
+
+  const byItemId = (id) =>
+    state.photos.flatMap((p) => p.items).find((i) => i.id === id);
+
+  const itemLabel = (id) => {
+    const found = byItemId(id);
+    return (found && found.headline) || id;
+  };
+
+  /* Two relationships the model can assert that do NOT merge items, shown
+     together because both are corrections a human makes in one glance:
+     a duplicate hides this item from the site, a link only cross-references
+     it. Neither should be silently trusted. */
+  function renderLinks(item) {
+    const links = item.related || [];
+    if (!item.duplicate_of && !links.length) return "";
+    return `
+      <div class="grouping links">
+        ${item.duplicate_of ? `
+          <span>Second copy of
+            <a href="#" data-act="goto" data-item="${item.duplicate_of}">${
+              escapeHtml(itemLabel(item.duplicate_of))}</a>
+            — will not be published</span>
+          <button data-act="unduplicate" data-item="${item.id}" class="ghost tiny">
+            Not a duplicate</button>` : ""}
+        ${links.map((link) => `
+          <span>See also
+            <a href="#" data-act="goto" data-item="${link.id}">${
+              escapeHtml(itemLabel(link.id))}</a>${
+            link.reason ? ` — ${escapeHtml(link.reason)}` : ""}</span>
+          <button data-act="unlink" data-item="${item.id}"
+                  data-other="${link.id}" class="ghost tiny">Unlink</button>`).join("")}
+      </div>`;
+  }
+
+  async function unduplicate(itemId) {
+    await api(`/api/item/${itemId}/duplicate`, {
+      method: "POST", body: JSON.stringify({ duplicate_of: null }),
+    });
+    const item = byItemId(itemId);
+    if (item) item.duplicate_of = null;
+    render();
+    toast("Marked as its own item — it will publish");
+  }
+
+  async function unlink(itemId, otherId) {
+    await api(`/api/item/${itemId}/link`, {
+      method: "POST",
+      body: JSON.stringify({ related_to: otherId, remove: true }),
+    });
+    for (const id of [itemId, otherId]) {
+      const item = byItemId(id);
+      if (item) item.related = (item.related || []).filter(
+        (l) => l.id !== (id === itemId ? otherId : itemId)
+      );
+    }
+    render();
+    toast("Link removed");
   }
 
   async function ungroup(itemId) {
@@ -337,6 +400,8 @@
           else if (act === "reanalyze") await reanalyze(item, btn);
           else if (act === "goto") { ev.preventDefault(); selectItem(item); }
           else if (act === "ungroup") await ungroup(item);
+          else if (act === "unduplicate") await unduplicate(item);
+          else if (act === "unlink") await unlink(item, btn.dataset.other);
           else if (act === "source") {
             const sha = photo || (state.photos.find((p) =>
               p.items.some((i) => i.id === item)) || {}).sha256;
@@ -424,6 +489,8 @@
       options: ["image", "text", "both"] },
     { key: "summary", label: "Summary", type: "textarea" },
     { key: "full_text", label: "Transcription", type: "textarea", big: true },
+    { key: "visual_description", label: "What the picture shows", type: "textarea",
+      hint: "For a photograph this is what search matches on - there is no transcription." },
     { key: "rotary_context", label: "Rotary context", type: "textarea" },
     { key: "condition_notes", label: "Condition", type: "text" },
     { key: "alt_text", label: "Alt text", type: "text" },

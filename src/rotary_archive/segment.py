@@ -679,20 +679,48 @@ def segment_photo_row(
                 headline=regions[seq].headline if seq < len(regions) else None,
             )
 
-        # Links are written after every row exists, because part_of_item_id is
-        # a foreign key onto a sibling that may not have been inserted yet.
-        for seq, region in enumerate(regions):
-            if seq >= len(item_ids) or region.part_of < 0:
-                continue
-            if region.part_of >= len(item_ids):
-                continue
-            db.set_item_part_of(
-                conn, item_ids[seq], item_ids[region.part_of], region.part_reason
-            )
+        # Links are written after every row exists, because each of them is a
+        # foreign key onto a sibling that may not have been inserted yet.
+        _write_links(conn, regions, item_ids)
 
         db.set_photo_status(conn, photo["sha256"], "segmented", result.note)
 
     return result
+
+
+def _write_links(conn: Any, regions: list[Any], item_ids: list[str]) -> None:
+    """Record what the vision pass said about how these items relate.
+
+    Three different relationships, deliberately kept apart:
+
+      part_of      merges a continuation into the item it continues
+      related_to   links separate objects about one subject, without merging
+      duplicate_of marks a second copy so only one of them reaches the site
+
+    Confusing the first two is the expensive mistake. A charity's own glossy
+    brochure lying on a newspaper story about that charity is not a page of the
+    story; folding it in would have the archive claim the newspaper printed it.
+    """
+    def resolve(index: int) -> str | None:
+        return item_ids[index] if 0 <= index < len(item_ids) else None
+
+    for seq, region in enumerate(regions):
+        if seq >= len(item_ids):
+            continue
+        item_id = item_ids[seq]
+
+        parent = resolve(region.part_of)
+        if parent:
+            db.set_item_part_of(conn, item_id, parent, region.part_reason)
+
+        original = resolve(region.duplicate_of)
+        if original:
+            db.set_item_duplicate_of(conn, item_id, original)
+
+        for other in region.related_to:
+            related = resolve(other)
+            if related:
+                db.link_items(conn, item_id, related, region.related_reason)
 
 
 def segment_pending(
