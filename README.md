@@ -215,7 +215,7 @@ nearly the same people. Two differences matter:
   and neither page shows her whole body of work.
 
 **So: Sonnet for both.** The saving from downgrading the cataloguing stage is
-around £3-4 per 500 items. That is not a sensible trade against a permanent
+around $3.50 per 500 items. That is not a sensible trade against a permanent
 record - but the per-stage overrides are there if the club's circumstances
 differ, and segmentation is the cheap stage either way, running once per
 photograph rather than once per item.
