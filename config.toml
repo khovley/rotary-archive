@@ -128,6 +128,15 @@ delete = false
 provider = "claude_cli"         # anthropic | openai | gemini | ollama | claude_cli
 model    = "claude-sonnet-5"
 
+# Optional per-stage overrides. The two stages are not alike. Segmentation runs
+# once per photograph - a hundred calls for a whole collection - and carries
+# the hard judgements: which pieces are one object, which continue each other,
+# which merely share a subject. Cataloguing runs once per item, ten times as
+# often, and is mostly transcription. Spend on the few hard calls, economise on
+# the many easy ones.
+# segment_model = "claude-sonnet-5"
+# analyze_model = "claude-haiku-4-5"
+
 # Batch runs bill at half price and are not latency-sensitive, which suits a
 # first pass over a whole collection: submit it and come back later. Turn this
 # off for small interactive runs where waiting for the queue is the slow part.

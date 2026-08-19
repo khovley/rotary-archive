@@ -167,7 +167,7 @@ def _do_segment(
         from .providers import ProviderError, build_provider
 
         try:
-            provider = build_provider(cfg.llm)
+            provider = build_provider(cfg.llm, stage="segment")
         except ProviderError as exc:
             console.print(f"[red]{exc}[/red]")
             raise typer.Exit(code=2)
@@ -289,7 +289,7 @@ def _do_analyze(
         return 0
 
     try:
-        provider = build_provider(cfg.llm)
+        provider = build_provider(cfg.llm, stage="analyze")
     except ProviderError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=2)

@@ -194,14 +194,26 @@ class VisionProvider(ABC):
 # ----------------------------------------------------------------- registry ---
 
 
-def build_provider(llm_config: dict[str, Any]) -> VisionProvider:
+def build_provider(
+    llm_config: dict[str, Any], *, stage: str | None = None
+) -> VisionProvider:
     """Construct the configured provider.
 
     Imports lazily so that a missing optional SDK only matters to the person
     who actually selected that provider.
+
+    `stage` picks up an optional per-stage model override. The two stages have
+    very different economics: segmentation runs once per *photograph* - perhaps
+    a hundred calls for a whole collection - and carries the hard reasoning
+    about which pieces belong together. Cataloguing runs once per *item*, ten
+    times as often, and is mostly transcription. Being able to spend on the
+    scarce hard calls and economise on the many easy ones is worth more than
+    picking one model for both.
     """
     name = str(llm_config.get("provider", "anthropic")).lower()
     model = str(llm_config.get("model", "claude-opus-5"))
+    if stage:
+        model = str(llm_config.get(f"{stage}_model") or model)
 
     if name == "anthropic":
         from .anthropic_provider import AnthropicProvider

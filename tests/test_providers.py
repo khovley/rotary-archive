@@ -191,3 +191,31 @@ def test_fake_provider_returns_a_well_formed_result(tmp_path):
     assert isinstance(result, AnalysisResult)
     assert result.ok
     assert result.data["title"] == GOOD_RESPONSE["title"]
+
+
+# ------------------------------------------------------ per-stage models ----
+
+
+def test_stage_override_picks_a_different_model():
+    """Segmentation runs once per photograph and carries the hard judgements;
+    cataloguing runs once per item and is mostly transcription. Being able to
+    spend on the few and economise on the many is the point."""
+    config = {
+        "provider": "claude_cli",
+        "model": "claude-sonnet-5",
+        "analyze_model": "claude-haiku-4-5",
+    }
+    assert build_provider(config, stage="segment").model == "claude-sonnet-5"
+    assert build_provider(config, stage="analyze").model == "claude-haiku-4-5"
+
+
+def test_no_override_falls_back_to_the_shared_model():
+    config = {"provider": "claude_cli", "model": "claude-sonnet-5"}
+    for stage in (None, "segment", "analyze"):
+        assert build_provider(config, stage=stage).model == "claude-sonnet-5"
+
+
+def test_an_empty_override_is_ignored_rather_than_used_as_a_model_name():
+    """A commented-out or blank key in config.toml must not become the model."""
+    config = {"provider": "claude_cli", "model": "claude-sonnet-5", "segment_model": ""}
+    assert build_provider(config, stage="segment").model == "claude-sonnet-5"
