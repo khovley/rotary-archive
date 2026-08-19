@@ -173,7 +173,9 @@ CREATE INDEX IF NOT EXISTS idx_item_entities_entity ON item_entities(entity_id);
 CREATE TABLE IF NOT EXISTS review_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     item_id    TEXT REFERENCES items(id) ON DELETE CASCADE,
-    action     TEXT NOT NULL,   -- approve | reject | recrop | rotate | edit | add | delete
+    action     TEXT NOT NULL,   -- approve | reject | recrop | rotate | edit | add |
+                                -- delete | group | ungroup | link | unlink |
+                                -- duplicate | unduplicate
     detail     TEXT,
     actor      TEXT,
     created_at TEXT NOT NULL

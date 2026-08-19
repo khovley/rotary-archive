@@ -300,6 +300,64 @@ Both were verified against a real model on an unlabelled group photograph with
 no text of any kind: it returned no names, `date_source: unknown`, and flagged
 the item for a human.
 
+## How items relate to one another
+
+A table of memorabilia is rarely a set of unrelated objects, and the ways they
+relate are not all the same. Collapsing them into one idea damages the record,
+so there are three, and the vision pass decides which applies.
+
+**`part_of` — merges.** The two pieces are *the same document*: a story carried
+onto a second strip, a column that spilled over, a photograph cut from the
+article it illustrated. They publish as one entry, one title, with the extra
+scans as further pages and their text folded into the searchable body — so a
+phrase from the continuation still finds the story.
+
+**`related_to` — links without merging.** The two items document the same
+subject or occasion but are separate things in their own right: a ticket and
+the programme for that night, a charity's own brochure lying beside a newspaper
+story about that charity. Each keeps its own entry, kind and date, and each
+shows a **See also** link to the other.
+
+The test is authorship, not subject. Would the same person have printed both,
+as parts of one thing? Then it is a merge. Different origins that happen to be
+about the same event? Then it is a link. Merging those would attribute one
+publisher's work to another.
+
+**`duplicate_of` — hides one copy.** The same page cut out twice, which is
+ordinary in a scrapbook. Both stay in the archive — they may be cropped or lit
+differently — but only one reaches the site, so the timeline, the search index
+and the entity counts agree with each other.
+
+Every one of these is a judgement, so each carries a `link_confidence` separate
+from the confidence in the crop itself. An uncaptioned photograph lying under an
+article is *probably* that article's photograph, but position is weak evidence —
+especially on a table where every item is about a similar subject. A low number
+there sends it to review rather than into the record. All three can be corrected
+in one click on the review page.
+
+Separately from all of this, the site computes a **Related items** band from
+shared people, organisations, places and topics. That is a good guess; the links
+above are assertions. They are shown apart so a guess is never laundered into a
+claim.
+
+## What makes the archive searchable
+
+Search runs client-side over the whole corpus — no server, works offline,
+instant at this scale.
+
+For anything with text, `full_text` is a verbatim transcription of every legible
+word, with `[illegible]` where the model could not read rather than a guess.
+Items whose content is really the words also get a Markdown rendering in
+`exports/`, so a clipping becomes a readable article with the scan alongside.
+
+For a photograph there is no transcription, so the description *is* the record.
+`visual_description` says what is actually visible — how many people, what they
+are doing, the room, the banner behind them, the insignia on it, anything that
+dates the scene. `alt_text` stays a single sentence for screen readers. Both are
+indexed, along with `rotary_context`, the summary, the title, extracted entities
+and the date. A photograph with neither transcription nor visual description is
+flagged: it would be in the archive and unfindable.
+
 ## Publishing
 
 See **[DEPLOY.md](DEPLOY.md)** for the full walkthrough. In short:
