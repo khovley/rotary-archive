@@ -657,11 +657,19 @@ def segment_photo_row(
         db.delete_items_for_photo(conn, photo["sha256"])
         item_ids: list[str] = []
         for seq, cand in enumerate(result.candidates):
-            flagged = cand.confidence < flag_below or result.needs_review
+            region = regions[seq] if seq < len(regions) else None
+            link_note = _uncertain_link(region, flag_below)
+
+            flagged = (
+                cand.confidence < flag_below
+                or result.needs_review
+                or link_note is not None
+            )
             reason = None
             if flagged:
                 reason = (
-                    result.note
+                    link_note
+                    or result.note
                     or f"detection confidence {cand.confidence:.2f} below {flag_below:.2f}"
                 )
             item_id = db.make_item_id(photo["sha256"], seq)
@@ -686,6 +694,37 @@ def segment_photo_row(
         db.set_photo_status(conn, photo["sha256"], "segmented", result.note)
 
     return result
+
+
+def _uncertain_link(region: Any, flag_below: float) -> str | None:
+    """Why a proposed relationship needs a human to look at it.
+
+    A crop the model is unsure of costs a moment to fix. A *relationship* it is
+    unsure of is different in kind: part_of publishes two objects as one entry
+    under one title, and duplicate_of hides one from the site entirely. Both
+    make a claim about the club's history, and a wrong one gets copied and
+    believed. So an uncertain link is flagged even when the box around it is
+    perfect - the two confidences are about different things.
+    """
+    if region is None:
+        return None
+    asserts = (
+        region.part_of >= 0 or region.duplicate_of >= 0 or bool(region.related_to)
+    )
+    if not asserts or region.link_confidence >= flag_below:
+        return None
+
+    if region.part_of >= 0:
+        claim = "belongs with another item"
+    elif region.duplicate_of >= 0:
+        claim = "is a duplicate, so would not be published"
+    else:
+        claim = "is linked to another item"
+    detail = region.part_reason or region.related_reason
+    return (
+        f"model says this {claim} but is only {region.link_confidence:.0%} sure"
+        + (f": {detail}" if detail else "")
+    )
 
 
 def _write_links(conn: Any, regions: list[Any], item_ids: list[str]) -> None:

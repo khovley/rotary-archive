@@ -305,3 +305,36 @@ def test_write_links_ignores_indexes_past_the_item_list(tmp_path):
     assert row["part_of_item_id"] is None
     assert row["duplicate_of_item_id"] is None
     assert db.related_items(conn, row["id"]) == []
+
+
+@pytest.mark.parametrize("kwargs,expect", [
+    ({"part_of": 0, "link_confidence": 0.25}, "belongs with another item"),
+    ({"duplicate_of": 0, "link_confidence": 0.4}, "duplicate"),
+    ({"related_to": [0], "link_confidence": 0.5}, "linked to another item"),
+])
+def test_an_uncertain_relationship_is_flagged_for_review(kwargs, expect):
+    """A shaky crop costs a moment to fix. A shaky *relationship* publishes two
+    objects as one entry, or hides one from the site entirely - a claim about
+    the club's history. It gets flagged even when the box is perfect."""
+    from rotary_archive.segment import _uncertain_link
+    from rotary_archive.vision_segment import Region
+
+    note = _uncertain_link(Region(box=(0, 0, 1, 1), **kwargs), 0.80)
+    assert note is not None and expect in note
+
+
+def test_a_confident_relationship_is_not_flagged():
+    from rotary_archive.segment import _uncertain_link
+    from rotary_archive.vision_segment import Region
+
+    region = Region(box=(0, 0, 1, 1), part_of=0, link_confidence=0.95)
+    assert _uncertain_link(region, 0.80) is None
+
+
+def test_an_item_asserting_nothing_is_not_flagged_by_link_confidence():
+    """link_confidence defaults low and means nothing when no link is claimed;
+    flagging on it alone would flag every standalone item on the table."""
+    from rotary_archive.segment import _uncertain_link
+    from rotary_archive.vision_segment import Region
+
+    assert _uncertain_link(Region(box=(0, 0, 1, 1), link_confidence=0.1), 0.80) is None

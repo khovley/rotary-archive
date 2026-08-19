@@ -226,6 +226,23 @@ def fold_groups(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     exceptional: parent and child are approved separately, and losing a
     clipping because its neighbour was still pending would be silent.
     """
+    # Duplicates drop out first, before any page is folded in. Doing it the
+    # other way round loses data: a page folded into a copy that is then
+    # discarded goes with it. A page whose parent was a duplicate is instead
+    # orphaned here and promoted below, which is recoverable.
+    #
+    # They drop at build time rather than at query time so the timeline, the
+    # search index and the entity counts all agree with each other.
+    everything = {record["id"]: record for record in records}
+    records = [
+        record for record in records
+        if not (
+            record["duplicate_of"]
+            and record["duplicate_of"] != record["id"]
+            and record["duplicate_of"] in everything
+        )
+    ]
+
     by_id = {record["id"]: record for record in records}
     absorbed: set[str] = set()
 
@@ -249,14 +266,7 @@ def fold_groups(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if record["text"]:
             parent["text"] = f"{parent['text']}\n\n{record['text']}".strip()
 
-    # A second copy of the same page is kept in the archive but must not
-    # appear twice on the site. It drops out here rather than at query time so
-    # the timeline, the search index and the entity counts all agree.
-    return [
-        record for record in records
-        if record["id"] not in absorbed
-        and not (record["duplicate_of"] and record["duplicate_of"] in by_id)
-    ]
+    return [record for record in records if record["id"] not in absorbed]
 
 
 def attach_related(

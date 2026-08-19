@@ -463,3 +463,25 @@ def test_visual_description_reaches_the_site_record(analysed):
     build_site(conn, project.paths, project.site)
     payload = load_payload(project.paths.site)
     assert all("visual" in record for record in payload["items"])
+
+
+def test_a_page_of_a_discarded_duplicate_is_not_lost_with_it():
+    """Duplicates must drop out before pages are folded in.
+
+    The other order loses data silently: the page is merged into the copy,
+    then the copy is discarded and takes the page with it. Orphaning the page
+    is recoverable - it is promoted to its own entry - so it is the safe
+    failure.
+    """
+    original = page("page2")
+    copy = page("page2-again")
+    copy["duplicate_of"] = "page2"
+    child = page("strip", part_of="page2-again", text="the rest of the story")
+
+    folded = fold_groups([original, copy, child])
+
+    assert "page2-again" not in [r["id"] for r in folded]
+    assert "strip" in [r["id"] for r in folded], "the page vanished with the copy"
+    assert "the rest of the story" in next(
+        r for r in folded if r["id"] == "strip"
+    )["text"]
