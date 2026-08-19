@@ -189,6 +189,38 @@ Estimated before every run and shown for confirmation. For 500 items:
 
 `ollama` is free; `claude_cli` bills to your subscription rather than per token.
 
+### Which model, measured
+
+Both stages were run against the same three real table shots and the same three
+cropped clippings, so this is comparison rather than assumption.
+
+**Segmentation needs Sonnet.** On the same photographs Haiku 4.5 invented source
+publications that do not exist - "Littleton Record", "Sample Magazine" - and put
+dates out by as much as twenty-five years. It also lost the reasoning the stage
+exists for: it found no merges and no duplicate on one photo, no relationships
+at all on another, and on the third it linked all six objects to each other,
+which collapses three separate events into one and is no more useful than
+linking nothing. It did read a folded programme correctly as one object with two
+panels.
+
+**Cataloguing is closer.** On three cropped clippings both models returned the
+same titles, the same dates with the same `printed`/`unknown` judgements, and
+nearly the same people. Two differences matter:
+
+* Haiku transcribed 5-27% less text per item, dropping the masthead line that
+  carries the paper and the date. `full_text` is the search index, so text not
+  transcribed is history not findable.
+* Haiku spelled the same byline "Jennifer" on two items and "Jenniffer" on a
+  third. Entities are deduplicated by name, so one reporter becomes two people
+  and neither page shows her whole body of work.
+
+**So: Sonnet for both.** The saving from downgrading the cataloguing stage is
+around £3-4 per 500 items. That is not a sensible trade against a permanent
+record - but the per-stage overrides are there if the club's circumstances
+differ, and segmentation is the cheap stage either way, running once per
+photograph rather than once per item.
+
+
 ---
 
 ## Measured behaviour
