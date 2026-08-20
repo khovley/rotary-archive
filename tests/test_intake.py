@@ -326,3 +326,36 @@ def test_rotate_controls_are_labelled_and_go_both_ways():
     assert 'data-act="rotate-ccw"' in js
     assert "Rotate ↻" in js
     assert "await rotate(state.selected, -90)" in js
+
+
+def test_the_viewer_can_be_turned_and_reasons_in_rotated_space():
+    """Fit, clamp and centring must use the extent the content occupies once
+    turned, not the raw image dimensions - a quarter turn swaps the axes."""
+    from pathlib import Path
+
+    js = (
+        Path(__file__).resolve().parents[1]
+        / "src/rotary_archive/review/static/app.js"
+    ).read_text()
+
+    assert "function lbSize()" in js
+    assert "lb.rotation % 180 === 0" in js
+    # Fit and clamp both go through it rather than reading lb.natural directly.
+    assert js.count("lbSize()") >= 3
+    assert 'id="lb-rot-cw"' in (
+        Path(__file__).resolve().parents[1]
+        / "src/rotary_archive/review/static/index.html"
+    ).read_text()
+
+
+def test_crop_outlines_are_thick_enough_to_see():
+    """Two pixels of non-scaling stroke disappeared against dense newsprint."""
+    from pathlib import Path
+
+    css = (
+        Path(__file__).resolve().parents[1]
+        / "src/rotary_archive/review/static/style.css"
+    ).read_text()
+    block = css[css.index(".lb-boxes polygon {"):]
+    width = int(block.split("stroke-width:")[1].split(";")[0].strip())
+    assert width >= 4, f"outline stroke is {width}px"

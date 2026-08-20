@@ -730,6 +730,8 @@
       else if (key === "b" && lb.boxes.length) {
         ev.preventDefault(); toggleLightboxBoxes();
       }
+      else if (key === "r") { ev.preventDefault(); rotateLightbox(90); }
+      else if (key === "R") { ev.preventDefault(); rotateLightbox(-90); }
       return;
     }
 
@@ -804,8 +806,16 @@
 
   const lb = {
     scale: 1, x: 0, y: 0, natural: [0, 0], panning: false, from: null,
-    boxes: [], showBoxes: true,
+    boxes: [], showBoxes: true, rotation: 0,
   };
+
+  /* What the content occupies on screen once rotated. A quarter turn swaps
+     the axes, and everything that positions the canvas - fit, clamp, centring
+     - has to reason about that rather than the raw image dimensions. */
+  function lbSize() {
+    const [w, h] = lb.natural;
+    return lb.rotation % 180 === 0 ? [w, h] : [h, w];
+  }
 
   function stageBox() {
     return $("#lb-stage").getBoundingClientRect();
@@ -820,6 +830,7 @@
     $("#lightbox").hidden = false;
 
     lb.boxes = boxes || [];
+    lb.rotation = 0;
     $("#lb-boxes").hidden = lb.boxes.length === 0;
 
     img.onload = () => {
@@ -850,9 +861,14 @@
       // The label is drawn at the image's own scale, then counter-scaled at
       // render time by the font size, so it stays legible when zoomed out.
       const size = Math.max(w, h) / 45;
+      // The label is counter-rotated about its own anchor so it stays the
+      // right way up however the view is turned - a number you have to read
+      // upside down is no use for telling one box from another.
+      const anchor = `${x + size * 0.3},${y + size * 0.9}`;
       return `
         <polygon points="${points}" class="${box.selected ? "sel" : ""}"></polygon>
-        <text x="${x + size * 0.3}" y="${y + size * 0.3}"
+        <text x="${x + size * 0.3}" y="${y + size * 0.9}"
+              transform="rotate(${-lb.rotation} ${anchor})"
               style="font-size:${size}px">${escapeHtml(box.label)}</text>`;
     }).join("");
   }
@@ -865,10 +881,29 @@
 
   function applyLightbox() {
     const canvas = $("#lb-canvas");
-    canvas.style.width = `${lb.natural[0]}px`;
-    canvas.style.height = `${lb.natural[1]}px`;
-    canvas.style.transform = `translate(${lb.x}px, ${lb.y}px) scale(${lb.scale})`;
+    const [w, h] = lb.natural;
+    canvas.style.width = `${w}px`;
+    canvas.style.height = `${h}px`;
+
+    /* Rotating about the top-left corner throws the content out of the
+       positive quadrant, so each quarter turn is followed by the shift that
+       brings its bounding box back to the origin. Doing it this way keeps
+       transform-origin at 0,0, which is what the pan and zoom arithmetic
+       everywhere else assumes. */
+    const shift = { 0: [0, 0], 90: [h, 0], 180: [w, h], 270: [0, w] }[lb.rotation];
+    canvas.style.transform =
+      `translate(${lb.x}px, ${lb.y}px) scale(${lb.scale}) ` +
+      `translate(${shift[0]}px, ${shift[1]}px) rotate(${lb.rotation}deg)`;
     $("#lb-zoom").textContent = `${Math.round(lb.scale * 100)}%`;
+  }
+
+  function rotateLightbox(degrees) {
+    const stage = stageBox();
+    // Keep the middle of the view on the same part of the image.
+    lb.rotation = (lb.rotation + degrees + 360) % 360;
+    drawLightboxBoxes();
+    fitLightbox();
+    void stage;
   }
 
   /* Panning must not be able to lose the image. Without this you can flick it
@@ -877,8 +912,9 @@
      of the image always stays on screen. */
   function clampLightbox() {
     const stage = stageBox();
-    const w = lb.natural[0] * lb.scale;
-    const h = lb.natural[1] * lb.scale;
+    const [rw, rh] = lbSize();
+    const w = rw * lb.scale;
+    const h = rh * lb.scale;
     const keep = 80;
 
     lb.x = w <= stage.width
@@ -891,7 +927,7 @@
 
   function fitLightbox() {
     const stage = stageBox();
-    const [w, h] = lb.natural;
+    const [w, h] = lbSize();
     if (!w || !h) return;
     // Never scale a small crop above 1:1 on "fit" - blowing up a 300px
     // thumbnail to fill a 4K screen just shows interpolation, not detail.
@@ -922,6 +958,8 @@
     $("#lb-in").addEventListener("click", () => zoomLightbox(1.25));
     $("#lb-out").addEventListener("click", () => zoomLightbox(1 / 1.25));
     $("#lb-boxes").addEventListener("click", toggleLightboxBoxes);
+    $("#lb-rot-ccw").addEventListener("click", () => rotateLightbox(-90));
+    $("#lb-rot-cw").addEventListener("click", () => rotateLightbox(90));
     $("#lb-full").addEventListener("click", () => {
       // Centre 1:1 on whatever is currently in the middle of the stage, so
       // zooming to actual size keeps you where you were looking.
