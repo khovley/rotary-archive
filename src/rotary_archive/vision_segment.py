@@ -298,6 +298,10 @@ class VisionResult:
     regions: list[Region] = field(default_factory=list)
     error: str | None = None
     usage: dict[str, Any] = field(default_factory=dict)
+    # Items the model described but whose coordinates could not be placed on
+    # the image. Surfaced rather than swallowed: a dropped region means a real
+    # piece of paper nobody has catalogued, and the photo needs a human.
+    dropped: int = 0
 
     @property
     def ok(self) -> bool:
@@ -365,8 +369,23 @@ def _ask(
         tmp_path.unlink(missing_ok=True)
 
 
+# Below this, in grid units, a region is not a piece of paper. Half a percent
+# of the frame is a 20px sliver on a 4000px photograph.
+MIN_GRID_EXTENT = 5
+
+
 def _to_pixels(box: Any, width: int, height: int) -> tuple[float, float, float, float] | None:
-    """Map a 0-1000 grid box onto full-resolution pixels."""
+    """Map a 0-1000 grid box onto full-resolution pixels.
+
+    Everything is clamped in *grid* space, before any conversion. Clamping
+    afterwards was a real defect: a model that answered past the edge of the
+    grid - top=1200 where the grid ends at 1000 - had its bottom pulled back to
+    the last pixel while its top was left beyond it, and the box came out
+    inverted. Those reached the crop stage as negative-height quads and
+    nineteen-pixel slivers, and because a degenerate box is also one the
+    refinement step refuses to touch, they sailed through untouched and became
+    the crops nobody could explain.
+    """
     try:
         left, top, right, bottom = (float(v) for v in box)
     except (TypeError, ValueError):
@@ -374,19 +393,25 @@ def _to_pixels(box: Any, width: int, height: int) -> tuple[float, float, float, 
 
     left, right = sorted((left, right))
     top, bottom = sorted((top, bottom))
-    if right - left < 1 or bottom - top < 1:
+
+    left, right, top, bottom = (
+        min(max(value, 0.0), float(GRID)) for value in (left, right, top, bottom)
+    )
+    if right - left < MIN_GRID_EXTENT or bottom - top < MIN_GRID_EXTENT:
         return None
 
     scale_x, scale_y = width / GRID, height / GRID
     return (
-        max(0.0, left * scale_x),
-        max(0.0, top * scale_y),
+        left * scale_x,
+        top * scale_y,
         min(float(width - 1), right * scale_x),
         min(float(height - 1), bottom * scale_y),
     )
 
 
-def _parse_regions(raw: Any, width: int, height: int) -> list[Region]:
+def _parse_regions(
+    raw: Any, width: int, height: int, dropped: list[int] | None = None
+) -> list[Region]:
     """Turn the model's items array into Regions in full-resolution pixels."""
     regions: list[Region] = []
     if not isinstance(raw, list):
@@ -397,6 +422,8 @@ def _parse_regions(raw: Any, width: int, height: int) -> list[Region]:
             continue
         box = _to_pixels(entry.get("box"), width, height)
         if box is None:
+            if dropped is not None:
+                dropped.append(1)
             continue
 
         try:
@@ -515,10 +542,11 @@ def propose_regions(path: Path, provider: Any) -> VisionResult:
     if not result.ok:
         return VisionResult(error=result.error, usage=result.usage)
 
-    regions = _parse_regions(result.data.get("items"), width, height)
+    dropped: list[int] = []
+    regions = _parse_regions(result.data.get("items"), width, height, dropped)
     if not regions:
         return VisionResult(error="model returned no usable items", usage=result.usage)
-    return VisionResult(regions=regions, usage=result.usage)
+    return VisionResult(regions=regions, usage=result.usage, dropped=len(dropped))
 
 
 # ------------------------------------------------------------------ refine ---

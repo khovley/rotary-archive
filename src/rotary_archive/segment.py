@@ -623,6 +623,14 @@ def segment_image_with_vision(
     notes = [f"{len(vision.regions)} item(s) identified by reading the page"]
     if grouped:
         notes.append(f"{grouped} marked as part of another item")
+    if vision.dropped:
+        # Worth saying out loud. Each one is a piece of paper the model saw and
+        # described but could not place, so the count on this photo is short.
+        notes.append(
+            f"{vision.dropped} more described but placed off the image - "
+            "check nothing is missing"
+        )
+        result.needs_review = True
     result.note = "; ".join(notes)
     return result
 
@@ -658,17 +666,24 @@ def segment_photo_row(
         item_ids: list[str] = []
         for seq, cand in enumerate(result.candidates):
             region = regions[seq] if seq < len(regions) else None
-            link_note = _uncertain_link(region, flag_below)
+            item_notes = [
+                note for note in (
+                    _unmatched_note(cand),
+                    _clipped_note(region),
+                    _collision_note(seq, result.candidates),
+                    _uncertain_link(region, flag_below),
+                ) if note
+            ]
 
             flagged = (
                 cand.confidence < flag_below
                 or result.needs_review
-                or link_note is not None
+                or bool(item_notes)
             )
             reason = None
             if flagged:
                 reason = (
-                    link_note
+                    "; ".join(item_notes)
                     or result.note
                     or f"detection confidence {cand.confidence:.2f} below {flag_below:.2f}"
                 )
@@ -694,6 +709,61 @@ def segment_photo_row(
         db.set_photo_status(conn, photo["sha256"], "segmented", result.note)
 
     return result
+
+
+def _unmatched_note(cand: Any) -> str | None:
+    """Say when a region never found a piece of paper to sit on.
+
+    Refinement takes the boundary from the pixels, using the model's box only
+    to say which item is meant. When it cannot find paper under that box it
+    hands the raw box back untouched and records the method as `vision_raw` -
+    which in practice means the model described something real but pointed at
+    the wrong part of the photograph, often at bare table.
+
+    That is the single most useful thing to surface. The crop looks plausible,
+    the headline beside it is correct, and only the method quietly says the
+    two were never connected.
+    """
+    if cand.method != "vision_raw":
+        return None
+    return (
+        "no paper found under this box - the item is real but the crop may be "
+        "pointing at the wrong part of the photo"
+    )
+
+
+def _clipped_note(region: Any) -> str | None:
+    """Say when the photograph, not the crop, is what lost the bottom of an item.
+
+    Worth distinguishing plainly. A bad crop is fixed by dragging a corner; an
+    item that ran off the edge of the frame cannot be recovered from this shot
+    at all, and the only remedy is to photograph it again. Without saying so,
+    the two look identical in review and the reshoot never happens.
+    """
+    if region is None or not getattr(region, "clipped_by_frame", False):
+        return None
+    return "runs off the edge of the photograph - reshoot to capture all of it"
+
+
+def _collision_note(seq: int, candidates: list[Any]) -> str | None:
+    """Flag an item whose crop lands mostly on top of another item's.
+
+    The model is much better at saying *what* is on the table than exactly
+    where, and its worst failure is putting a box on the wrong piece of paper
+    entirely - which then snaps neatly onto that neighbour and looks confident.
+    Two crops claiming the same paper is the visible symptom, and it is cheap
+    to detect even though the underlying misplacement is not.
+    """
+    mine = candidates[seq].quad
+    for other, cand in enumerate(candidates):
+        if other == seq:
+            continue
+        if geometry.bbox_containment(mine, cand.quad) >= 0.70:
+            return (
+                "this crop sits almost entirely inside another item's crop - "
+                "one of the two is on the wrong piece of paper"
+            )
+    return None
 
 
 def _uncertain_link(region: Any, flag_below: float) -> str | None:

@@ -338,3 +338,41 @@ def test_an_item_asserting_nothing_is_not_flagged_by_link_confidence():
     from rotary_archive.vision_segment import Region
 
     assert _uncertain_link(Region(box=(0, 0, 1, 1), link_confidence=0.1), 0.80) is None
+
+
+def test_an_item_running_off_the_frame_says_so():
+    """A bad crop is fixed by dragging a corner. An item that ran off the edge
+    of the photograph cannot be recovered from this shot at all - the only
+    remedy is to shoot it again. In review the two look identical unless the
+    difference is stated."""
+    from rotary_archive.segment import _clipped_note
+    from rotary_archive.vision_segment import Region
+
+    note = _clipped_note(Region(box=(0, 0, 1, 1), clipped_by_frame=True))
+    assert note is not None and "reshoot" in note
+    assert _clipped_note(Region(box=(0, 0, 1, 1))) is None
+
+
+def test_two_crops_claiming_the_same_paper_are_flagged():
+    """The model's worst failure is putting a box on the wrong piece of paper,
+    which then snaps neatly onto that neighbour and looks confident. Detecting
+    the collision is cheap even though the misplacement is not."""
+    from rotary_archive.segment import _collision_note
+
+    outer = candidate(0, 0, 100, 100, area_frac=0.2)
+    inner = candidate(10, 10, 60, 60, area_frac=0.05)
+    apart = candidate(500, 500, 600, 600, area_frac=0.05)
+
+    assert _collision_note(1, [outer, inner, apart]) is not None
+    assert _collision_note(2, [outer, inner, apart]) is None
+
+
+def test_a_region_that_found_no_paper_says_so():
+    """vision_raw means refinement could not find paper under the model's box,
+    so the raw box went through untouched. In practice the model described
+    something real but pointed at the wrong part of the photograph - and the
+    crop looks plausible while only the method quietly says so."""
+    from rotary_archive.segment import _unmatched_note
+
+    assert _unmatched_note(candidate(0, 0, 10, 10, method="vision_raw")) is not None
+    assert _unmatched_note(candidate(0, 0, 10, 10, method="vision")) is None

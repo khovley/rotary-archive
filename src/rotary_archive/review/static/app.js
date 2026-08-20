@@ -613,41 +613,72 @@
     const { photo, quad } = state.editing;
     const stage = $("#editor-stage");
     const sw = photo.width || 1, sh = photo.height || 1;
-    const handles = quad.map(([x, y], i) =>
-      `<circle class="handle" data-i="${i}" cx="${x}" cy="${y}" r="${Math.max(sw, sh) * 0.012}"></circle>`
-    ).join("");
+    const radius = Math.max(sw, sh) * 0.012;
 
     stage.innerHTML = `
       <img src="/media/photo/${photo.sha256}" alt="">
       <svg viewBox="0 0 ${sw} ${sh}" preserveAspectRatio="none">
         <polygon points="${quad.map(([x, y]) => `${x},${y}`).join(" ")}"></polygon>
-        ${handles}
+        ${quad.map(([x, y], i) =>
+          `<circle class="handle" data-i="${i}" cx="${x}" cy="${y}" r="${radius}"></circle>`
+        ).join("")}
       </svg>`;
 
     const svg = stage.querySelector("svg");
-    svg.querySelectorAll(".handle").forEach((handle) => {
+    const polygon = svg.querySelector("polygon");
+    const handles = [...svg.querySelectorAll(".handle")];
+
+    /* Corner positions are written onto the existing nodes rather than
+       re-rendering the stage.
+
+       Rebuilding the SVG on every pointermove detached the very element the
+       drag closure measures against, and a detached node reports a zero-sized
+       rect - so the next event divided by zero, the corner shot to the
+       bottom-right of the image, and the handle could not be picked up again.
+       It moved correctly for exactly one frame first, which made it look like
+       a snapping feature rather than a crash. */
+    const paint = () => {
+      const current = state.editing.quad;
+      polygon.setAttribute(
+        "points", current.map(([x, y]) => `${x},${y}`).join(" ")
+      );
+      handles.forEach((handle, i) => {
+        handle.setAttribute("cx", current[i][0]);
+        handle.setAttribute("cy", current[i][1]);
+      });
+    };
+
+    handles.forEach((handle) => {
       handle.addEventListener("pointerdown", (ev) => {
         ev.preventDefault();
+        ev.stopPropagation();
         handle.setPointerCapture(ev.pointerId);
         const index = Number(handle.dataset.i);
 
         const move = (e) => {
           const rect = svg.getBoundingClientRect();
-          // Map pointer position back into full-resolution source coordinates.
+          // A zero-sized rect means the stage is not laid out. Dividing by it
+          // is what produced the jump, so refuse rather than guess.
+          if (!rect.width || !rect.height) return;
           const x = ((e.clientX - rect.left) / rect.width) * sw;
           const y = ((e.clientY - rect.top) / rect.height) * sh;
           state.editing.quad[index] = [
             Math.max(0, Math.min(sw, x)),
             Math.max(0, Math.min(sh, y)),
           ];
-          drawEditor();
+          paint();
         };
-        const up = () => {
+        const up = (e) => {
+          if (handle.hasPointerCapture?.(e.pointerId)) {
+            handle.releasePointerCapture(e.pointerId);
+          }
           window.removeEventListener("pointermove", move);
           window.removeEventListener("pointerup", up);
+          window.removeEventListener("pointercancel", up);
         };
         window.addEventListener("pointermove", move);
         window.addEventListener("pointerup", up);
+        window.addEventListener("pointercancel", up);
       });
     });
   }

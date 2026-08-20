@@ -373,3 +373,51 @@ def test_link_confidence_is_separate_from_box_confidence():
     )[1]
     assert region.confidence == 0.95
     assert region.link_confidence == 0.3
+
+
+# ------------------------------------------ boxes the model placed badly ----
+
+# The model sometimes answers past the edge of the 0-1000 grid. Clamping the
+# result *after* converting to pixels pulled the bottom back to the last row
+# while leaving the top beyond it, so the box came out inverted - and because a
+# degenerate box is also one refine_regions refuses to touch, it passed
+# straight through to the crop. Real photographs produced negative-height quads
+# and nineteen-pixel slivers this way.
+
+
+@pytest.mark.parametrize("box,why", [
+    ([100, 1200, 500, 1210], "entirely past the bottom of the grid"),
+    ([100, 1100, 400, 1500], "starts and ends past the grid"),
+    ([1200, 100, 1300, 400], "entirely past the right of the grid"),
+    ([0, 500, 1000, 503], "a sliver too thin to be paper"),
+    ([400, 400, 402, 900], "a sliver too narrow to be paper"),
+])
+def test_a_box_that_cannot_be_placed_is_rejected(box, why):
+    assert _to_pixels(box, 3024, 4032) is None, why
+
+
+@pytest.mark.parametrize("box", [
+    [200, 1400, 600, 900],     # inverted and out of range
+    [-300, -200, 400, 400],    # negative coordinates
+    [900, 900, 1400, 1400],    # runs off the bottom-right corner
+])
+def test_a_salvageable_box_stays_the_right_way_up(box):
+    """Partly off the image is ordinary - an item at the edge of the frame.
+    It gets trimmed, and must never come back inverted."""
+    left, top, right, bottom = _to_pixels(box, 3024, 4032)
+    assert right > left and bottom > top
+    assert 0 <= left and 0 <= top
+    assert right <= 3023 and bottom <= 4031
+
+
+def test_dropped_regions_are_counted_not_swallowed():
+    """A dropped region is a real piece of paper nobody has catalogued. The
+    count has to reach the review page or the photo looks complete."""
+    result = _parse_regions
+    dropped: list[int] = []
+    regions = result(
+        [entry([0, 0, 200, 200]), entry([100, 1200, 500, 1210]), entry([300, 300, 500, 500])],
+        1000, 1000, dropped,
+    )
+    assert len(regions) == 2
+    assert len(dropped) == 1
