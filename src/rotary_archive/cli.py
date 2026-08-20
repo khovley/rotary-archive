@@ -644,8 +644,15 @@ def run(
 ) -> None:
     """Ingest, segment, and rectify everything new, then open review.
 
-    Analysis is opt-in via --analyze. Ingest, segment, and rectify are free and
-    local, so `run` stays free by default and never spends money by surprise.
+    Segmentation reads each photograph with the configured model, which costs
+    one call per photo - not per item. That is what makes it able to tell a
+    continued story from two unrelated clippings, and it is the difference
+    between finding 6 items on a crowded table and finding 2. Turn it off with
+    `use_vision = false` under \[segment] or `rotary segment --no-ai` for the free
+    contour-only path.
+
+    Cataloguing every item is the expensive stage and stays opt-in via
+    --analyze, so `run` never spends the bulk of the money by surprise.
     """
     cfg, conn = _load()
     _do_ingest(cfg, conn, move)

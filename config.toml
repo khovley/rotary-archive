@@ -43,13 +43,21 @@ iou_merge_threshold = 0.35
 single_item_frac = 0.85
 
 # Ask a vision model to read the photo and mark out each item, then snap those
-# regions onto the real paper edges. Contour detection alone cannot tell that a
-# headline strip belongs to the columns beneath it, or that two strips are one
-# story continued - which is most of what a table of overlapping newsprint is.
+# regions onto the real paper edges.
 #
-# Costs one model call per photo, so it is off by default. Turn it on here, or
-# per run with `rotary segment --ai`.
-use_vision = false
+# On by default, because contour detection alone cannot do this job. It cannot
+# tell that a headline strip belongs to the columns beneath it, that two strips
+# are one story continued, that a folded programme lying open is one object and
+# not two, or that a glossy brochure resting on a newspaper is a different item
+# altogether. That is most of what a table of overlapping memorabilia is. On the
+# real photographs in this project the difference is stark: reading the page
+# found 6 items where contours found 2.
+#
+# It costs one model call per photograph - not per item - which makes it the
+# cheap stage: a hundred calls for a whole collection against a thousand for
+# cataloguing. Turn it off with `rotary segment --no-ai` if you ever want the
+# free path.
+use_vision = true
 
 [rectify]
 # Residual rotation search range for the fine deskew, in degrees. Perspective

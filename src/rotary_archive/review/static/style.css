@@ -481,3 +481,8 @@ button.tiny {
 .badge.rel { background: #dbe6f5; color: #1d4275; }
 
 .grouping.links { flex-direction: column; align-items: flex-start; }
+
+/* The rotate controls were a bare glyph and read as a stray dot in the row of
+   buttons - people could not find them. Labelled, and sized so the arrows
+   render as arrows. */
+button.rot { font-size: .95rem; line-height: 1.1; }

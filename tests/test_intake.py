@@ -299,3 +299,30 @@ def test_the_source_photo_click_is_bound_to_the_container():
     ).read_text()
     assert 'querySelectorAll(".source")' in js
     assert 'querySelectorAll(".source img")' not in js
+
+
+def test_the_vision_pass_is_on_by_default():
+    """Contour detection alone cannot do this job - on the real photographs in
+    this project it found 2 items where reading the page found 6. Shipping it
+    switched off meant a plain `rotary run` silently used the weaker path and
+    none of the merge, link or duplicate reasoning ever executed."""
+    from pathlib import Path
+
+    from rotary_archive.config import load_config
+
+    cfg = load_config(Path(__file__).resolve().parents[1])
+    assert cfg.segment.get("use_vision") is True
+
+
+def test_rotate_controls_are_labelled_and_go_both_ways():
+    """They were a single bare glyph that rendered as a stray dot, so nobody
+    could find them."""
+    from pathlib import Path
+
+    js = (
+        Path(__file__).resolve().parents[1]
+        / "src/rotary_archive/review/static/app.js"
+    ).read_text()
+    assert 'data-act="rotate-ccw"' in js
+    assert "Rotate ↻" in js
+    assert "await rotate(state.selected, -90)" in js

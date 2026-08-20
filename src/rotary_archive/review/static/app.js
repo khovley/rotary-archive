@@ -208,7 +208,10 @@
           <button data-act="approve" data-item="${item.id}">Approve</button>
           <button data-act="reject" data-item="${item.id}" class="ghost">Reject</button>
           <button data-act="crop" data-item="${item.id}" class="ghost">Crop</button>
-          <button data-act="rotate" data-item="${item.id}" class="ghost">⟳</button>
+          <button data-act="rotate-ccw" data-item="${item.id}" class="ghost rot"
+                  title="Rotate left 90° (Shift+R)" aria-label="Rotate left">↺</button>
+          <button data-act="rotate" data-item="${item.id}" class="ghost rot"
+                  title="Rotate right 90° (R)" aria-label="Rotate right">Rotate ↻</button>
           ${item.analysis
             ? `<button data-act="edit" data-item="${item.id}" class="ghost">Edit</button>`
             : ""}
@@ -346,10 +349,13 @@
     render();
   }
 
-  async function rotate(id) {
+  /* Rotation is stored as a total on the item and the master is re-rectified
+     from the original photograph each time, so turning it four times returns
+     the exact original pixels rather than accumulating resampling loss. */
+  async function rotate(id, degrees = 90) {
     const updated = await api(`/api/item/${id}/rotate`, {
       method: "POST",
-      body: JSON.stringify({ degrees: 90 }),
+      body: JSON.stringify({ degrees }),
     });
     replaceItem(updated.item);
     bustThumb(id);
@@ -394,7 +400,8 @@
         try {
           if (act === "approve") await decide([item], "approved");
           else if (act === "reject") await decide([item], "rejected");
-          else if (act === "rotate") await rotate(item);
+          else if (act === "rotate") await rotate(item, 90);
+          else if (act === "rotate-ccw") await rotate(item, -90);
           else if (act === "crop") openEditor(item);
           else if (act === "edit") openFieldEditor(item);
           else if (act === "reanalyze") await reanalyze(item, btn);
@@ -720,7 +727,9 @@
         await decide([state.selected], "rejected");
         if (next) selectItem(next);
       } else if (key === "r" && state.selected) {
-        ev.preventDefault(); await rotate(state.selected);
+        ev.preventDefault(); await rotate(state.selected, 90);
+      } else if (key === "R" && state.selected) {
+        ev.preventDefault(); await rotate(state.selected, -90);
       } else if (key === "c" && state.selected) {
         ev.preventDefault(); openEditor(state.selected);
       } else if (key === "e" && state.selected) {
