@@ -114,6 +114,12 @@
                     title="Full-size source photo with every crop drawn on it">
               Inspect crops
             </button>
+            <button data-act="redetect" data-photo="${photo.sha256}" class="ghost"
+                    title="Read this photo again and rebuild its items. Reading is not
+                           deterministic, so a crowded table can come out better on a
+                           second attempt.">
+              Detect again
+            </button>
           </div>
         </div>
         <div class="photo-body">
@@ -418,6 +424,7 @@
             const group = state.photos.find((p) => p.sha256 === photo);
             await decide(group.items.filter(matchesFilter).map((i) => i.id), "approved");
           } else if (act === "add-item") startAddItem(photo);
+          else if (act === "redetect") await redetect(photo, btn);
         } catch (err) {
           toast(err.message, 4000);
         }
@@ -462,6 +469,50 @@
         selected: item.id === (highlight || state.selected),
       }))
     );
+  }
+
+  /* Re-reads one photograph and rebuilds its items. Any manual crops on that
+     photo are discarded, which is why it asks first - and reading is not
+     deterministic, so this is a re-roll rather than a repair. */
+  async function redetect(sha, button) {
+    const photo = state.photos.find((p) => p.sha256 === sha);
+    const count = photo ? photo.items.length : 0;
+    if (!confirm(
+      `Read ${photo ? photo.name : sha} again?\n\n` +
+      `This discards the ${count} item(s) currently detected on it, including ` +
+      `any crops you have corrected by hand. Other photos are untouched.`
+    )) return;
+
+    if (button) { button.disabled = true; button.textContent = "reading…"; }
+    try {
+      await api(`/api/photo/${sha}/redetect`, { method: "POST" });
+    } catch (err) {
+      if (button) { button.disabled = false; button.textContent = "Detect again"; }
+      throw err;
+    }
+
+    // The work runs on a server thread, so this is only watching it. Same
+    // job object the whole-inbox run uses, so the two cannot overlap.
+    clearInterval(inboxPoll);
+    inboxPoll = setInterval(async () => {
+      let job;
+      try {
+        job = await api("/api/process");
+      } catch (err) {
+        return;
+      }
+      if (button) button.textContent = job.message ? "reading…" : "reading…";
+      if (job.state === "running") return;
+
+      clearInterval(inboxPoll);
+      if (button) { button.disabled = false; button.textContent = "Detect again"; }
+      if (job.state === "error") {
+        toast(job.error || "Re-detection stopped early.", 6000);
+        return;
+      }
+      await reload();
+      toast(job.message || "Detection finished - check the crops", 5000);
+    }, 700);
   }
 
   async function reanalyze(id, button) {

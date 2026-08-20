@@ -104,7 +104,7 @@ class PipelineJob:
             for key, value in fields.items():
                 setattr(self, key, value)
 
-    def start(self, cfg: Config) -> bool:
+    def start(self, cfg: Config, only: str | None = None) -> bool:
         if self.running:
             return False
         with self._lock:
@@ -112,11 +112,71 @@ class PipelineJob:
             self.state = "running"
             self.stage = "starting"
             self.started_at = time.monotonic()
+        target = self._redetect if only else self._run
         self._thread = threading.Thread(
-            target=self._run, args=(cfg,), daemon=True
+            target=target, args=(cfg, only) if only else (cfg,), daemon=True
         )
         self._thread.start()
         return True
+
+    def _redetect(self, cfg: Config, sha: str) -> None:
+        """Read one photograph again and rebuild only its items.
+
+        Reading a page is not deterministic: the same crowded table can come
+        back with nine well-placed regions one run and seven the next. Being
+        able to re-roll a single photograph - rather than the whole inbox -
+        is the difference between fixing it and living with it.
+        """
+        from ..rectify import rectify_pending
+        from ..segment import segment_pending
+
+        conn = db.connect(cfg.paths.database)
+        try:
+            photo = db.get_photo(conn, sha)
+            if photo is None:
+                raise FileNotFoundError(sha)
+            name = photo["original_name"]
+
+            self._set(stage="segment", message=f"Reading {name} again...")
+            results = segment_pending(
+                conn, cfg.paths, cfg.segment,
+                flag_below=float(cfg.review.get("flag_below_confidence", 0.80)),
+                provider=self._provider(cfg),
+                only=[sha],
+            )
+            found = sum(len(r.candidates) for r in results)
+
+            self._set(stage="rectify", message="Cropping and straightening...")
+            rectified = rectify_pending(
+                conn, cfg.paths, cfg.rectify,
+                progress=lambda i: self._set(message=f"Cropping {i['id']}"),
+            )
+            self._set(
+                state="done", stage="done",
+                message=f"{name}: found {found} item(s).",
+                finished_at=time.monotonic(),
+                counts={"items": found, "rectified": len(rectified)},
+            )
+        except Exception as exc:
+            self._set(
+                state="error", stage="error", error=f"{type(exc).__name__}: {exc}",
+                message="Re-detection stopped early.", finished_at=time.monotonic(),
+            )
+        finally:
+            conn.close()
+
+    def _provider(self, cfg: Config) -> Any:
+        """The model used to read each photograph, or None if not configured.
+
+        Built once per run rather than per photo, and reported rather than
+        swallowed: a run that quietly drops to contour detection finds a
+        fraction of the items and gives no clue why.
+        """
+        if not cfg.segment.get("use_vision", False):
+            return None
+        from ..providers import build_provider
+
+        return build_provider(cfg.llm, stage="segment")
 
     def _run(self, cfg: Config) -> None:
         from ..ingest import ingest_inbox
@@ -135,12 +195,18 @@ class PipelineJob:
                               "duplicates": len(ingested.skipped_duplicate),
                               "unreadable": len(ingested.unreadable)})
 
-            self._set(stage="segment", message="Finding items in each photo...")
+            provider = self._provider(cfg)
+            self._set(
+                stage="segment",
+                message="Reading each photo..." if provider
+                else "Finding items in each photo...",
+            )
             flag_below = float(cfg.review.get("flag_below_confidence", 0.80))
             results = segment_pending(
                 conn, cfg.paths, cfg.segment, flag_below=flag_below,
+                provider=provider,
                 progress=lambda p: self._set(
-                    message=f"Finding items in {p['original_name']}"
+                    message=f"Reading {p['original_name']}"
                 ),
             )
             found = sum(len(r.candidates) for r in results)
@@ -579,6 +645,17 @@ class Handler(BaseHTTPRequestHandler):
             return self._open_inbox()
         if path == "/api/process":
             return self._start_process()
+
+        if path.startswith("/api/photo/") and path.endswith("/redetect"):
+            sha = path.split("/")[3]
+            conn = self._conn()
+            try:
+                if db.get_photo(conn, sha) is None:
+                    raise FileNotFoundError(sha)
+            finally:
+                conn.close()
+            started = _job.start(self.cfg, only=sha)
+            return self._json({"ok": started, "job": _job.snapshot()}, 200 if started else 409)
 
         body = self._body()
         conn = self._conn()

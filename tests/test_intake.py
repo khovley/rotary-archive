@@ -359,3 +359,24 @@ def test_crop_outlines_are_thick_enough_to_see():
     block = css[css.index(".lb-boxes polygon {"):]
     width = int(block.split("stroke-width:")[1].split(";")[0].strip())
     assert width >= 4, f"outline stroke is {width}px"
+
+
+def test_the_pipeline_builds_a_reader_when_one_is_configured(project):
+    """The review server ran a whole session without this.
+
+    PipelineJob never built a provider, so segment_photo_row took its silent
+    fallback and every run started from the UI used contour detection only -
+    finding two items on a table of six with nothing to say why. The config
+    said use_vision; the code simply never honoured it.
+    """
+    from rotary_archive.review.server import PipelineJob
+
+    job = PipelineJob()
+
+    project.segment["use_vision"] = False
+    assert job._provider(project) is None
+
+    project.segment["use_vision"] = True
+    provider = job._provider(project)
+    assert provider is not None
+    assert provider.model == project.llm.get("model")

@@ -653,11 +653,24 @@ def segment_photo_row(
 ) -> SegmentResult:
     """Segment one photo row and persist the resulting items."""
     source = paths.absolute(photo["stored_path"])
-    result = (
-        segment_image_with_vision(source, cfg, provider)
-        if provider is not None
-        else segment_image(source, cfg)
-    )
+    wants_vision = bool(cfg.get("use_vision", False))
+
+    if wants_vision and provider is not None:
+        result = segment_image_with_vision(source, cfg, provider)
+    else:
+        result = segment_image(source, cfg)
+        if wants_vision:
+            # Configured to read the page but handed no provider. This used to
+            # fall through to contour detection without a word, which is how
+            # the review UI ran for a whole session finding two items on a
+            # table of six. A quiet downgrade to a much weaker method is worse
+            # than a loud failure, so it is neither quiet nor silent now.
+            result.needs_review = True
+            result.note = (
+                "contour detection only - the page was never read. "
+                "The caller did not supply a model, so nothing was merged, "
+                "linked or identified."
+            )
     result.photo_sha256 = photo["sha256"]
 
     regions = result.vision_regions
@@ -841,11 +854,22 @@ def segment_pending(
     force: bool = False,
     progress: Any = None,
     provider: Any = None,
+    only: Sequence[str] | None = None,
 ) -> list[SegmentResult]:
-    """Segment every photo that hasn't been segmented yet (or all, with force)."""
-    photos = (
-        db.all_photos(conn) if force else db.photos_with_status(conn, "ingested")
-    )
+    """Segment every photo that hasn't been segmented yet (or all, with force).
+
+    `only` restricts the run to specific photos, which is what lets a single
+    troublesome one be re-detected from the review page without touching the
+    rest. Reading a page is not deterministic - the same photograph can come
+    back with nine good regions one run and seven the next - so being able to
+    re-roll one photo cheaply matters more than it sounds.
+    """
+    if only:
+        photos = [p for p in (db.get_photo(conn, sha) for sha in only) if p]
+    elif force:
+        photos = db.all_photos(conn)
+    else:
+        photos = db.photos_with_status(conn, "ingested")
     results = []
     for photo in photos:
         if progress is not None:

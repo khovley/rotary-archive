@@ -376,3 +376,95 @@ def test_a_region_that_found_no_paper_says_so():
 
     assert _unmatched_note(candidate(0, 0, 10, 10, method="vision_raw")) is not None
     assert _unmatched_note(candidate(0, 0, 10, 10, method="vision")) is None
+
+
+def test_wanting_vision_without_a_provider_is_loud(tmp_path):
+    """A quiet downgrade to contour detection is worse than a loud failure.
+
+    This has now bitten twice: once as use_vision shipping false, and once as
+    the review server never building a provider. Both times a table of six
+    items came back with two and nothing said why. Falling back is fine; doing
+    it silently is not.
+    """
+    from rotary_archive import db
+    from rotary_archive.config import load_config
+    from rotary_archive.segment import segment_photo_row
+    from pathlib import Path
+
+    cfg = dict(load_config(Path(__file__).resolve().parents[1]).segment)
+    cfg["use_vision"] = True
+
+    path = tmp_path / "scene.jpg"
+    make_table_shot(path, n_items=4, seed=3)
+    conn = db.connect(tmp_path / "t.db")
+    with db.transaction(conn):
+        db.insert_photo(
+            conn, sha256="c" * 64, original_name="scene.jpg",
+            stored_path="scene.jpg", width=3024, height=4032,
+            captured_at=None, exif=None, size_bytes=1,
+        )
+
+    class Paths:
+        def absolute(self, _):
+            return path
+
+    result = segment_photo_row(
+        conn, Paths(), db.get_photo(conn, "c" * 64), cfg, provider=None
+    )
+
+    assert result.needs_review
+    assert "never read" in result.note
+    assert db.get_photo(conn, "c" * 64)["segment_note"] == result.note
+
+
+def test_only_restricts_a_run_to_the_named_photos(tmp_path):
+    """Reading a page is not deterministic - the same crowded table can come
+    back with nine good regions one run and seven the next - so re-rolling a
+    single photograph must not disturb the others."""
+    from rotary_archive import db
+    from rotary_archive.config import load_config
+    from rotary_archive.segment import segment_pending
+    from pathlib import Path
+
+    seg = load_config(Path(__file__).resolve().parents[1]).segment
+    conn = db.connect(tmp_path / "t.db")
+    paths_seen = []
+
+    shas = []
+    for n, seed in enumerate((3, 7)):
+        p = tmp_path / f"s{n}.jpg"
+        make_table_shot(p, n_items=4, seed=seed)
+        sha = f"{n}" * 64
+        shas.append(sha)
+        with db.transaction(conn):
+            db.insert_photo(
+                conn, sha256=sha, original_name=p.name, stored_path=p.name,
+                width=3024, height=4032, captured_at=None, exif=None, size_bytes=1,
+            )
+
+    class Paths:
+        def absolute(self, rel):
+            return tmp_path / rel
+
+    segment_pending(conn, Paths(), seg,
+                    progress=lambda p: paths_seen.append(p["sha256"]),
+                    only=[shas[1]])
+    assert paths_seen == [shas[1]]
+    assert db.items_for_photo(conn, shas[0]) == []
+    assert db.items_for_photo(conn, shas[1]) != []
+
+
+def test_only_ignores_a_sha_that_is_not_in_the_archive(tmp_path):
+    from rotary_archive import db
+    from rotary_archive.config import load_config
+    from rotary_archive.segment import segment_pending
+    from pathlib import Path
+
+    seg = load_config(Path(__file__).resolve().parents[1]).segment
+    conn = db.connect(tmp_path / "t.db")
+
+    class Paths:
+        def absolute(self, rel):
+            return tmp_path / rel
+
+    assert segment_pending(conn, Paths(), seg, only=["nope"]) == []
